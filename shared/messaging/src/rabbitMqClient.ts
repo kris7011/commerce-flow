@@ -8,9 +8,15 @@ interface RabbitMqClientOptions {
     retryDelayInMs?: number;
 }
 
+interface MessageEvent {
+    eventId: string;
+    correlationId: string;
+}
+
 export class RabbitMqClient {
     private connection: RabbitConnection | null = null;
     private channel: Channel | null = null;
+    private readonly processedEventIdsByQueueName = new Map<string, Set<string>>();
 
     constructor(
         private readonly url: string,
@@ -62,7 +68,7 @@ export class RabbitMqClient {
         );
     }
 
-    async publish<TEvent extends { eventId: string; correlationId: string }>(
+    async publish<TEvent extends MessageEvent>(
         routingKey: string,
         event: TEvent
     ): Promise<void> {
@@ -86,7 +92,7 @@ export class RabbitMqClient {
         );
     }
 
-    async subscribe<TEvent>(
+    async subscribe<TEvent extends MessageEvent>(
         queueName: string,
         routingKeys: string[],
         handler: (event: TEvent, message: ConsumeMessage) => Promise<void>
@@ -134,8 +140,20 @@ export class RabbitMqClient {
 
             try {
                 const event = JSON.parse(message.content.toString()) as TEvent;
+                const eventId = getRequiredEventId(event);
+
+                if (this.hasProcessedEvent(queueName, eventId)) {
+                    console.warn(
+                        `[messaging] Duplicate event '${eventId}' received on queue '${queueName}'. Acknowledging without reprocessing.`
+                    );
+
+                    this.channel?.ack(message);
+                    return;
+                }
 
                 await handler(event, message);
+
+                this.markEventAsProcessed(queueName, eventId);
 
                 this.channel?.ack(message);
             } catch (error) {
@@ -164,12 +182,37 @@ export class RabbitMqClient {
         this.channel = null;
         this.connection = null;
     }
+
+    private hasProcessedEvent(queueName: string, eventId: string): boolean {
+        const processedEventIds = this.processedEventIdsByQueueName.get(queueName);
+
+        return processedEventIds?.has(eventId) ?? false;
+    }
+
+    private markEventAsProcessed(queueName: string, eventId: string): void {
+        const existingSet = this.processedEventIdsByQueueName.get(queueName);
+
+        if (existingSet) {
+            existingSet.add(eventId);
+            return;
+        }
+
+        this.processedEventIdsByQueueName.set(queueName, new Set([eventId]));
+    }
 }
 
 function sleep(milliseconds: number): Promise<void> {
     return new Promise(resolve => {
         setTimeout(resolve, milliseconds);
     });
+}
+
+function getRequiredEventId(event: MessageEvent): string {
+    if (typeof event.eventId !== "string" || event.eventId.length === 0) {
+        throw new Error("Message does not contain a valid eventId.");
+    }
+
+    return event.eventId;
 }
 
 function getErrorMessage(error: unknown): string {
