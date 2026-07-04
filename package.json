@@ -1,0 +1,29 @@
+{
+  "name": "commerce-flow",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Event-driven microservice backend demo for an e-commerce order flow.",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "workspaces": [
+    "shared/contracts",
+    "shared/messaging",
+    "services/order-service",
+    "services/payment-service"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "dev:order": "npm run dev --workspace=@commerce-flow/order-service",
+    "dev:payment": "npm run dev --workspace=@commerce-flow/payment-service",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  },
+  "devDependencies": {
+    "@types/amqplib": "^0.10.5",
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.10.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}
