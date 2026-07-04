@@ -13,7 +13,8 @@
     "services/order-service",
     "services/payment-service",
     "services/inventory-service",
-    "services/delivery-service"
+    "services/delivery-service",
+    "services/notification-service"
   ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",
@@ -21,6 +22,7 @@
     "dev:payment": "npm run dev --workspace=@commerce-flow/payment-service",
     "dev:inventory": "npm run dev --workspace=@commerce-flow/inventory-service",
     "dev:delivery": "npm run dev --workspace=@commerce-flow/delivery-service",
+    "dev:notification": "npm run dev --workspace=@commerce-flow/notification-service",
     "typecheck": "npm run typecheck --workspaces --if-present"
   },
   "devDependencies": {
