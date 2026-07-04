@@ -1,4 +1,4 @@
-{
+﻿{
   "name": "commerce-flow",
   "version": "0.1.0",
   "private": true,
@@ -12,13 +12,15 @@
     "shared/messaging",
     "services/order-service",
     "services/payment-service",
-    "services/inventory-service"
+    "services/inventory-service",
+    "services/delivery-service"
   ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",
     "dev:order": "npm run dev --workspace=@commerce-flow/order-service",
     "dev:payment": "npm run dev --workspace=@commerce-flow/payment-service",
     "dev:inventory": "npm run dev --workspace=@commerce-flow/inventory-service",
+    "dev:delivery": "npm run dev --workspace=@commerce-flow/delivery-service",
     "typecheck": "npm run typecheck --workspaces --if-present"
   },
   "devDependencies": {

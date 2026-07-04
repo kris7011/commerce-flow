@@ -2,7 +2,8 @@ export type EventType =
     | "OrderCreated"
     | "PaymentAuthorized"
     | "InventoryReserved"
-    | "InventoryReservationFailed";
+    | "InventoryReservationFailed"
+    | "DeliveryBooked";
 
 export interface DomainEvent<TEventType extends EventType, TData> {
     eventId: string;
@@ -68,8 +69,21 @@ export type InventoryReservationFailedEvent = DomainEvent<
     InventoryReservationFailedData
 >;
 
+export interface DeliveryBookedData {
+    orderId: string;
+    deliveryId: string;
+    carrier: string;
+    estimatedDeliveryDate: string;
+}
+
+export type DeliveryBookedEvent = DomainEvent<
+    "DeliveryBooked",
+    DeliveryBookedData
+>;
+
 export type CommerceEvent =
     | OrderCreatedEvent
     | PaymentAuthorizedEvent
     | InventoryReservedEvent
-    | InventoryReservationFailedEvent;
+    | InventoryReservationFailedEvent
+    | DeliveryBookedEvent;
