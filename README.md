@@ -1,158 +1,136 @@
 # CommerceFlow
 
-CommerceFlow is a backend demo project built to explore event-driven microservice architecture in an e-commerce domain.
+CommerceFlow is a backend demo project built to demonstrate event-driven microservice architecture in an e-commerce domain.
 
-The purpose of the project is to model a simplified order flow where services communicate through asynchronous domain events instead of direct service-to-service calls.
+The project models a simplified order flow where services communicate through asynchronous domain events using RabbitMQ instead of direct service-to-service HTTP calls.
 
-This project is intentionally built step by step to make the architecture easy to understand and explain. The goal is not to build a complete webshop, but to demonstrate backend engineering principles used in scalable distributed systems.
+The goal is not to build a complete webshop, but to demonstrate backend engineering concepts such as service boundaries, domain events, asynchronous messaging, reliability patterns, and traceability across distributed services.
 
-## Current version
+## What the project demonstrates
 
-The first version contains two services:
+CommerceFlow demonstrates:
 
-- Order Service
-- Payment Service
-
-The event flow is:
-
-```text
-POST /orders
-  -> Order Service creates an order
-  -> Order Service publishes OrderCreated
-  -> Payment Service consumes OrderCreated
-  -> Payment Service publishes PaymentAuthorized
-```
-
-## Why this project exists
-
-The project demonstrates backend concepts that are relevant for scalable e-commerce systems:
-
-- Service boundaries
+- Event-driven microservice architecture
+- Backend service boundaries
 - Domain events
-- Event-driven architecture
-- Asynchronous communication
-- RabbitMQ as message broker
-- TypeScript backend services
-- Correlation IDs for traceability
-- Loose coupling between services
+- RabbitMQ topic exchange and routing keys
+- Asynchronous communication between services
+- Shared event contracts
+- Correlation IDs for tracing
+- Dead-letter queues for failed messages
+- RabbitMQ connection retry handling
+- Idempotent message handling
+- A simple e-commerce order flow
 
-Later versions will add:
+## Current architecture
 
-- PostgreSQL persistence
-- Transactional outbox
-- Idempotent consumers
-- Retries
-- Dead-letter queues
-- Observability
-- Automated tests
+The system currently contains five services:
 
-## Architecture overview
+| Service              | Responsibility                                                                                   |
+| -------------------- | ------------------------------------------------------------------------------------------------ |
+| Order Service        | Receives order requests and publishes `OrderCreated`                                             |
+| Payment Service      | Listens to `OrderCreated` and publishes `PaymentAuthorized`                                      |
+| Inventory Service    | Listens to `PaymentAuthorized` and publishes `InventoryReserved` or `InventoryReservationFailed` |
+| Delivery Service     | Listens to `InventoryReserved` and publishes `DeliveryBooked`                                    |
+| Notification Service | Listens to `DeliveryBooked` and `InventoryReservationFailed` and creates customer notifications  |
 
-The first version focuses on one simple business flow:
+## Event flow
+
+Successful order flow:
 
 ```text
-Client
-  -> Order Service
-  -> RabbitMQ
-  -> Payment Service
-  -> RabbitMQ
-```
-
-The Order Service does not call the Payment Service directly.
-
-Instead, the Order Service publishes an `OrderCreated` event.
-
-The Payment Service listens for that event and reacts by simulating a payment authorization. When payment is authorized, it publishes a `PaymentAuthorized` event.
-
-This keeps the services loosely coupled.
-
-## Services
-
-### Order Service
-
-The Order Service owns order creation.
-
-Responsibilities:
-
-- Receive order requests
-- Validate incoming order data
-- Create an order ID
-- Calculate total order amount
-- Publish an `OrderCreated` domain event
-
-Endpoint:
-
-```http
 POST /orders
+  -> Order Service
+  -> OrderCreated
+  -> Payment Service
+  -> PaymentAuthorized
+  -> Inventory Service
+  -> InventoryReserved
+  -> Delivery Service
+  -> DeliveryBooked
+  -> Notification Service
+  -> Customer notification
 ```
 
-Health check:
-
-```http
-GET /health
-```
-
-Default port:
+Failure flow when inventory cannot be reserved:
 
 ```text
-3001
+POST /orders
+  -> Order Service
+  -> OrderCreated
+  -> Payment Service
+  -> PaymentAuthorized
+  -> Inventory Service
+  -> InventoryReservationFailed
+  -> Notification Service
+  -> Customer notification
 ```
 
-### Payment Service
+## Architecture diagram
 
-The Payment Service owns payment authorization.
+```mermaid
+flowchart LR
+    Client[Client] -->|POST /orders| Order[Order Service]
 
-Responsibilities:
+    Order -->|order.created| RabbitMQ[(RabbitMQ topic exchange)]
 
-- Subscribe to `OrderCreated`
-- Simulate payment authorization
-- Publish `PaymentAuthorized`
+    RabbitMQ -->|order.created| Payment[Payment Service]
+    Payment -->|payment.authorized| RabbitMQ
 
-Health check:
+    RabbitMQ -->|payment.authorized| Inventory[Inventory Service]
+    Inventory -->|inventory.reserved| RabbitMQ
+    Inventory -->|inventory.reservation.failed| RabbitMQ
 
-```http
-GET /health
+    RabbitMQ -->|inventory.reserved| Delivery[Delivery Service]
+    Delivery -->|delivery.booked| RabbitMQ
+
+    RabbitMQ -->|delivery.booked| Notification[Notification Service]
+    RabbitMQ -->|inventory.reservation.failed| Notification
 ```
 
-Default port:
+## Why event-driven architecture?
+
+In a direct HTTP-based flow, the Order Service might need to call several downstream services:
 
 ```text
-3002
+Order Service
+  -> Payment Service
+  -> Inventory Service
+  -> Delivery Service
+  -> Notification Service
 ```
 
-## Shared libraries
+That creates tight coupling. The Order Service would need to know which services exist and when to call them.
 
-The project contains shared packages for contracts and messaging.
+In this project, the Order Service only publishes an event:
 
-### shared/contracts
+```text
+OrderCreated
+```
 
-Contains event contracts used by the services.
+Other services can react independently.
+
+This makes the system easier to extend. For example, Notification Service was added later by subscribing to existing events without changing Order Service, Payment Service, Inventory Service, or Delivery Service.
+
+## Domain events
+
+A domain event represents something important that has happened in the business domain.
 
 Current events:
 
-- `OrderCreated`
-- `PaymentAuthorized`
+| Event                        | Meaning                               |
+| ---------------------------- | ------------------------------------- |
+| `OrderCreated`               | An order has been created             |
+| `PaymentAuthorized`          | Payment has been authorized           |
+| `InventoryReserved`          | Stock has been reserved for the order |
+| `InventoryReservationFailed` | Stock could not be reserved           |
+| `DeliveryBooked`             | Delivery has been booked              |
 
-The contracts are shared so that services agree on the structure of events.
+## RabbitMQ setup
 
-### shared/messaging
+The project uses RabbitMQ as a message broker.
 
-Contains a small RabbitMQ wrapper used by the services.
-
-It handles:
-
-- Connecting to RabbitMQ
-- Creating the topic exchange
-- Publishing events
-- Subscribing to routing keys
-- Acknowledging messages
-- Rejecting failed messages
-
-## Message broker
-
-RabbitMQ is used as the message broker.
-
-The exchange used by the project is:
+Main exchange:
 
 ```text
 commerce.events
@@ -164,39 +142,98 @@ Exchange type:
 topic
 ```
 
-Current routing keys:
+Routing keys:
 
 ```text
 order.created
 payment.authorized
+inventory.reserved
+inventory.reservation.failed
+delivery.booked
 ```
 
-Current queue:
+Each service owns its own queue.
+
+Example:
 
 ```text
 payment-service.order-created
+inventory-service.payment-authorized
+delivery-service.inventory-reserved
+notification-service.customer-events
 ```
 
-## Correlation ID
+## Reliability patterns
 
-A correlation ID is used to trace a business flow across services.
+### Connection retry
 
-When creating an order, you can provide this header:
+Services may start before RabbitMQ is ready to accept AMQP connections.
 
-```http
-x-correlation-id: demo-correlation-001
+The shared RabbitMQ client retries the initial connection several times before failing.
+
+This prevents services from crashing immediately when Docker has started the container, but RabbitMQ is still initializing.
+
+### Dead-letter queues
+
+Each consumer queue is configured with a dead-letter queue.
+
+If a message cannot be processed, for example because the payload is invalid JSON, the message is rejected without requeueing and RabbitMQ moves it to a dead-letter queue.
+
+Example:
+
+```text
+payment-service.order-created
+  -> payment-service.order-created.dead-letter
 ```
 
-If no correlation ID is provided, the Order Service generates one automatically.
+This makes failed messages inspectable instead of silently losing them.
 
-The same correlation ID is passed from:
+### Idempotent message handling
+
+Messages in distributed systems may be delivered more than once.
+
+The shared RabbitMQ client tracks processed event IDs per queue. If the same event ID is received again on the same queue, the message is acknowledged without running the handler again.
+
+This prevents duplicate side effects such as:
+
+- duplicate payment authorization
+- duplicate stock reservation
+- duplicate delivery booking
+- duplicate customer notifications
+
+Current implementation is in-memory and intended to demonstrate the principle.
+
+A production version should persist processed event IDs in the service database using a unique constraint.
+
+## Correlation IDs
+
+Each event contains a `correlationId`.
+
+This makes it possible to trace one business flow across multiple services.
+
+Example:
+
+```text
+demo-correlation-005
+```
+
+The same correlation ID is passed through:
 
 ```text
 OrderCreated
   -> PaymentAuthorized
+  -> InventoryReserved
+  -> DeliveryBooked
 ```
 
-This makes it easier to follow logs across services.
+## Tech stack
+
+- Node.js
+- TypeScript
+- Express
+- RabbitMQ
+- Docker Compose
+- npm workspaces
 
 ## Requirements
 
@@ -206,22 +243,12 @@ You need:
 - npm
 - Docker Desktop
 
-Check Node version:
+Check versions:
 
 ```bash
 node -v
-```
-
-Check npm version:
-
-```bash
 npm -v
-```
-
-Check Docker:
-
-```bash
-docker --version
+docker version
 ```
 
 ## Running locally
@@ -238,68 +265,64 @@ Start RabbitMQ:
 docker compose up -d
 ```
 
-Start Order Service:
+If RabbitMQ was just started, wait a few seconds before starting services.
 
-```bash
-npm run dev:order
-```
-
-Start Payment Service in another terminal:
+Start services in separate terminals:
 
 ```bash
 npm run dev:payment
+npm run dev:inventory
+npm run dev:delivery
+npm run dev:notification
+npm run dev:order
 ```
 
-## Test the services
+Consumer services should be started before Order Service so their queues and bindings exist before new events are published.
 
-Order Service health check:
+## Health checks
 
 ```bash
 curl http://localhost:3001/health
-```
-
-Expected response:
-
-```json
-{
-  "status": "Healthy",
-  "service": "order-service"
-}
-```
-
-Payment Service health check:
-
-```bash
 curl http://localhost:3002/health
+curl http://localhost:3003/health
+curl http://localhost:3004/health
+curl http://localhost:3005/health
 ```
 
-Expected response:
+Service ports:
 
-```json
-{
-  "status": "Healthy",
-  "service": "payment-service"
-}
-```
+| Service              | Port |
+| -------------------- | ---- |
+| Order Service        | 3001 |
+| Payment Service      | 3002 |
+| Inventory Service    | 3003 |
+| Delivery Service     | 3004 |
+| Notification Service | 3005 |
 
 ## Create an order
 
-Use this command:
+PowerShell example:
 
-```bash
-curl -X POST http://localhost:3001/orders \
-  -H "content-type: application/json" \
-  -H "x-correlation-id: demo-correlation-001" \
-  -d '{
-    "customerId": "customer-1001",
-    "items": [
-      {
-        "productId": "washing-machine-01",
-        "quantity": 1,
-        "unitPrice": 4999
-      }
-    ]
-  }'
+```powershell
+$body = @{
+    customerId = "customer-1004"
+    items = @(
+        @{
+            productId = "dishwasher-01"
+            quantity = 1
+            unitPrice = 3499
+        }
+    )
+} | ConvertTo-Json -Depth 5
+
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://localhost:3001/orders" `
+  -Headers @{
+      "content-type" = "application/json"
+      "x-correlation-id" = "demo-correlation-005"
+  } `
+  -Body $body
 ```
 
 Expected response:
@@ -308,36 +331,53 @@ Expected response:
 {
   "orderId": "...",
   "status": "Created",
-  "totalAmount": 4999,
-  "correlationId": "demo-correlation-001"
+  "totalAmount": 3499,
+  "correlationId": "demo-correlation-005"
 }
 ```
 
-## Expected logs
+## Check notifications
 
-Order Service should log something similar to:
-
-```text
-[messaging] Connected to RabbitMQ exchange commerce.events
-[order-service] Listening on port 3001
-[messaging] Published event with routing key 'order.created' and correlationId 'demo-correlation-001'
-[order-service] Created order '...' with correlationId 'demo-correlation-001'
+```powershell
+Invoke-RestMethod http://localhost:3005/notifications
 ```
 
-Payment Service should log something similar to:
+After a successful order, Notification Service should contain a `DeliveryBooked` notification.
+
+## Test inventory failure
+
+```powershell
+$body = @{
+    customerId = "customer-1005"
+    items = @(
+        @{
+            productId = "dryer-01"
+            quantity = 99
+            unitPrice = 3999
+        }
+    )
+} | ConvertTo-Json -Depth 5
+
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://localhost:3001/orders" `
+  -Headers @{
+      "content-type" = "application/json"
+      "x-correlation-id" = "demo-correlation-006"
+  } `
+  -Body $body
+```
+
+This should result in:
 
 ```text
-[messaging] Connected to RabbitMQ exchange commerce.events
-[messaging] Subscribed queue 'payment-service.order-created' to routing keys: order.created
-[payment-service] Listening on port 3002
-[payment-service] Received OrderCreated for order '...' with correlationId 'demo-correlation-001'
-[messaging] Published event with routing key 'payment.authorized' and correlationId 'demo-correlation-001'
-[payment-service] Authorized payment for order '...'
+InventoryReservationFailed
+  -> Notification Service
 ```
 
 ## RabbitMQ management UI
 
-RabbitMQ management UI is available at:
+RabbitMQ UI:
 
 ```text
 http://localhost:15672
@@ -346,111 +386,88 @@ http://localhost:15672
 Login:
 
 ```text
-username: guest
-password: guest
+guest / guest
 ```
 
-In the UI you can inspect:
+Useful areas to inspect:
 
 - Exchanges
 - Queues
 - Bindings
-- Published and consumed messages
+- Dead-letter queues
+- Message counts
 
 ## Type checking
 
-Run TypeScript type checking:
-
 ```bash
 npm run typecheck
-```
-
-## Build
-
-Build all workspaces:
-
-```bash
-npm run build
 ```
 
 ## Project structure
 
 ```text
 commerce-flow/
-├── .gitignore
 ├── docker-compose.yml
 ├── package.json
 ├── tsconfig.base.json
 ├── README.md
-├── docs/
-│   └── architecture.md
 ├── shared/
 │   ├── contracts/
-│   │   ├── package.json
-│   │   ├── tsconfig.json
 │   │   └── src/
 │   │       ├── events.ts
 │   │       └── index.ts
 │   └── messaging/
-│       ├── package.json
-│       ├── tsconfig.json
 │       └── src/
 │           ├── rabbitMqClient.ts
 │           └── index.ts
 └── services/
     ├── order-service/
-    │   ├── package.json
-    │   ├── tsconfig.json
-    │   └── src/
-    │       └── index.ts
-    └── payment-service/
-        ├── package.json
-        ├── tsconfig.json
-        └── src/
-            └── index.ts
+    ├── payment-service/
+    ├── inventory-service/
+    ├── delivery-service/
+    └── notification-service/
 ```
 
-## Next planned steps
+## Current limitations
 
-The next iterations will expand the system gradually.
+The project intentionally keeps some parts simple.
 
-Planned commits:
+Current limitations:
 
-```text
-Add inventory service for stock reservation
-Add delivery service for delivery booking
-Add notification service for customer updates
-Add PostgreSQL persistence to order service
-Add transactional outbox for reliable event publishing
-Add idempotent event handling
-Add retry and dead-letter queue handling
-Add structured logging and observability
-Add tests for event handlers
-```
+- No persistent databases yet
+- Inventory stock is stored in memory
+- Notifications are stored in memory
+- Idempotency is in-memory and does not survive service restart
+- No transactional outbox yet
+- No automated tests yet
+- No real payment provider
+- No real delivery provider
+- No real email/SMS integration
 
-## Learning goals
+## Planned improvements
 
-This project is built to demonstrate the thinking behind event-driven backend systems.
+Possible next iterations:
 
-Important architectural questions explored by the project:
-
-- How do services communicate without direct dependencies?
-- How do we model business events?
-- How do we keep services loosely coupled?
-- How do we trace a business process across services?
-- What reliability problems appear when messages are handled asynchronously?
-- Why do patterns like outbox, idempotency and dead-letter queues become important?
+- Add PostgreSQL persistence per service
+- Add transactional outbox for reliable event publishing
+- Persist processed event IDs for durable idempotency
+- Add automated tests
+- Add structured logging
+- Add OpenTelemetry tracing
+- Add Dockerfiles for running services in containers
+- Add retry policies for failed message handling
+- Add replay tooling for dead-letter messages
 
 ## Interview explanation
 
-A short explanation of the current version:
+Short explanation:
 
 ```text
-I started by building a small e-commerce order flow using Node.js, TypeScript and RabbitMQ.
+CommerceFlow is a small e-commerce backend demo built with Node.js, TypeScript and RabbitMQ.
 
-The first version focuses on the basic event-driven flow: the Order Service publishes an OrderCreated event, and the Payment Service reacts to that event asynchronously.
+The project demonstrates event-driven microservice architecture through a simplified order flow. Order Service publishes OrderCreated, Payment Service reacts with PaymentAuthorized, Inventory Service reserves stock, Delivery Service books delivery, and Notification Service reacts to customer-facing outcomes.
 
-I intentionally started simple because I wanted the commits to show the evolution of the architecture instead of pushing a finished demo in one large commit.
+I built it step by step to show the evolution of the architecture instead of pushing one large finished project. Later commits add reliability patterns such as RabbitMQ connection retry, dead-letter queues and idempotent message handling.
 
-The next steps are to add persistence, transactional outbox, idempotent consumers, retries and dead-letter queues, because those are the patterns that become important when event-driven systems need to be reliable in production.
+The current version is intentionally simple in terms of persistence, but it demonstrates the backend concepts I wanted to focus on: service boundaries, asynchronous events, loose coupling and reliability concerns in distributed systems.
 ```
