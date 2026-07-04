@@ -1,4 +1,8 @@
-export type EventType = "OrderCreated" | "PaymentAuthorized";
+export type EventType =
+    | "OrderCreated"
+    | "PaymentAuthorized"
+    | "InventoryReserved"
+    | "InventoryReservationFailed";
 
 export interface DomainEvent<TEventType extends EventType, TData> {
     eventId: string;
@@ -30,6 +34,7 @@ export interface PaymentAuthorizedData {
     orderId: string;
     paymentId: string;
     amount: number;
+    items: OrderItem[];
 }
 
 export type PaymentAuthorizedEvent = DomainEvent<
@@ -37,4 +42,34 @@ export type PaymentAuthorizedEvent = DomainEvent<
     PaymentAuthorizedData
 >;
 
-export type CommerceEvent = OrderCreatedEvent | PaymentAuthorizedEvent;
+export interface InventoryReservedData {
+    orderId: string;
+    reservationId: string;
+    items: OrderItem[];
+}
+
+export type InventoryReservedEvent = DomainEvent<
+    "InventoryReserved",
+    InventoryReservedData
+>;
+
+export interface InventoryReservationFailedData {
+    orderId: string;
+    reason: string;
+    unavailableItems: {
+        productId: string;
+        requestedQuantity: number;
+        availableQuantity: number;
+    }[];
+}
+
+export type InventoryReservationFailedEvent = DomainEvent<
+    "InventoryReservationFailed",
+    InventoryReservationFailedData
+>;
+
+export type CommerceEvent =
+    | OrderCreatedEvent
+    | PaymentAuthorizedEvent
+    | InventoryReservedEvent
+    | InventoryReservationFailedEvent;

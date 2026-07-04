@@ -11,12 +11,14 @@
     "shared/contracts",
     "shared/messaging",
     "services/order-service",
-    "services/payment-service"
+    "services/payment-service",
+    "services/inventory-service"
   ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",
     "dev:order": "npm run dev --workspace=@commerce-flow/order-service",
     "dev:payment": "npm run dev --workspace=@commerce-flow/payment-service",
+    "dev:inventory": "npm run dev --workspace=@commerce-flow/inventory-service",
     "typecheck": "npm run typecheck --workspaces --if-present"
   },
   "devDependencies": {

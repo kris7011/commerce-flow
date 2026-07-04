@@ -1,6 +1,7 @@
-import express, { Request, Response } from "express";
+import express from "express";
+import type { Request, Response } from "express";
 import { randomUUID } from "node:crypto";
-import {
+import type {
     OrderCreatedEvent,
     PaymentAuthorizedEvent
 } from "@commerce-flow/contracts";
@@ -33,7 +34,8 @@ async function handleOrderCreated(event: OrderCreatedEvent): Promise<void> {
         data: {
             orderId: event.data.orderId,
             paymentId: randomUUID(),
-            amount: event.data.totalAmount
+            amount: event.data.totalAmount,
+            items: event.data.items
         }
     };
 
