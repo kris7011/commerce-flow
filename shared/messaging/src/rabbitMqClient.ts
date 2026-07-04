@@ -97,8 +97,30 @@ export class RabbitMqClient {
             throw new Error("RabbitMQ channel was not initialized.");
         }
 
-        await this.channel.assertQueue(queueName, {
+        const deadLetterExchangeName = `${this.exchangeName}.dead-letter`;
+        const deadLetterQueueName = `${queueName}.dead-letter`;
+        const deadLetterRoutingKey = `${queueName}.dead-letter`;
+
+        await this.channel.assertExchange(deadLetterExchangeName, "topic", {
             durable: true
+        });
+
+        await this.channel.assertQueue(deadLetterQueueName, {
+            durable: true
+        });
+
+        await this.channel.bindQueue(
+            deadLetterQueueName,
+            deadLetterExchangeName,
+            deadLetterRoutingKey
+        );
+
+        await this.channel.assertQueue(queueName, {
+            durable: true,
+            arguments: {
+                "x-dead-letter-exchange": deadLetterExchangeName,
+                "x-dead-letter-routing-key": deadLetterRoutingKey
+            }
         });
 
         for (const routingKey of routingKeys) {
@@ -117,7 +139,10 @@ export class RabbitMqClient {
 
                 this.channel?.ack(message);
             } catch (error) {
-                console.error("[messaging] Failed to process message", error);
+                console.error(
+                    `[messaging] Failed to process message from queue '${queueName}'. Moving message to dead-letter queue '${deadLetterQueueName}'.`,
+                    error
+                );
 
                 this.channel?.nack(message, false, false);
             }
@@ -125,6 +150,10 @@ export class RabbitMqClient {
 
         console.log(
             `[messaging] Subscribed queue '${queueName}' to routing keys: ${routingKeys.join(", ")}`
+        );
+
+        console.log(
+            `[messaging] Dead-letter queue '${deadLetterQueueName}' configured for queue '${queueName}'`
         );
     }
 
