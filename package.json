@@ -18,12 +18,13 @@
   ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
     "dev:order": "npm run dev --workspace=@commerce-flow/order-service",
     "dev:payment": "npm run dev --workspace=@commerce-flow/payment-service",
     "dev:inventory": "npm run dev --workspace=@commerce-flow/inventory-service",
     "dev:delivery": "npm run dev --workspace=@commerce-flow/delivery-service",
-    "dev:notification": "npm run dev --workspace=@commerce-flow/notification-service",
-    "typecheck": "npm run typecheck --workspaces --if-present"
+    "dev:notification": "npm run dev --workspace=@commerce-flow/notification-service"
   },
   "devDependencies": {
     "@types/amqplib": "^0.10.5",
