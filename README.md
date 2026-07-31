@@ -2,15 +2,16 @@
 
 # CommerceFlow
 
-### Event-driven commerce backend built with TypeScript, RabbitMQ and independently running services
+### Event-driven commerce workflow built with TypeScript, RabbitMQ and independently running services
 
-**Node.js · TypeScript · RabbitMQ · Express · Docker · Event-Driven Architecture**
+**Node.js · TypeScript · RabbitMQ · Express · Docker · npm Workspaces**
 
 [Overview](#overview) ·
 [Architecture](#architecture) ·
+[Services](#services) ·
 [Getting started](#getting-started) ·
-[Event flow](#event-flow) ·
-[Engineering decisions](#engineering-decisions) ·
+[Running the demo](#running-the-demo) ·
+[Reliability](#reliability) ·
 [Roadmap](#roadmap)
 
 </div>
@@ -19,64 +20,111 @@
 
 ## Overview
 
-CommerceFlow is a backend demonstration project that explores how independently running services can collaborate through asynchronous events.
+CommerceFlow is an event-driven backend demonstration project that shows how independently running services can collaborate through asynchronous events.
 
 The system models a simplified commerce workflow:
 
 1. An order is created.
 2. Payment is authorized.
-3. Inventory attempts to reserve the requested stock.
-4. The reservation either succeeds or fails.
+3. Inventory attempts to reserve the requested products.
+4. A delivery is booked when the reservation succeeds.
+5. A customer notification is created.
+6. An alternative notification is created if the inventory reservation fails.
 
-Instead of connecting the services through direct HTTP dependencies, CommerceFlow publishes domain events through RabbitMQ. Each service reacts only to the events relevant to its own responsibility.
+The services do not communicate through direct service-to-service HTTP calls.
 
-The project focuses on service boundaries, asynchronous communication, reliability and maintainability rather than on building a complete e-commerce platform.
+Instead, they publish and consume domain events through RabbitMQ. Each service only understands the events relevant to its own responsibility.
+
+The project focuses on:
+
+* Service boundaries
+* Asynchronous communication
+* Event contracts
+* Reliability
+* Loose coupling
+* Failure handling
+* Maintainable infrastructure abstractions
+
+CommerceFlow is deliberately small enough to understand while still demonstrating patterns used in larger distributed systems.
 
 ---
 
 ## Why this project exists
 
-Commerce systems often contain workflows that cross several technical and business boundaries.
+Commerce workflows often cross several business and technical boundaries.
 
 A single order can involve:
 
 * Order registration
 * Payment processing
-* Inventory management
+* Inventory reservation
 * Delivery planning
-* Customer notifications
+* Customer communication
 * Auditing
 * Failure recovery
 
-Implementing all of this inside one tightly coupled application can make the system difficult to change and scale.
+A tightly coupled implementation can cause every service to depend directly on the availability, endpoint structure and implementation details of the next service.
 
-CommerceFlow demonstrates an alternative approach where:
+CommerceFlow demonstrates another approach:
 
-* Each service owns a clearly defined responsibility.
-* Services do not need direct knowledge of one another.
-* Communication happens through versioned events.
-* Shared messaging infrastructure is isolated behind reusable abstractions.
-* Failures can be handled without blocking the complete workflow.
+* Each service owns one clear business responsibility.
+* Services communicate through typed events.
+* Publishers do not need to know which consumers exist.
+* New consumers can be added without changing existing publishers.
+* Failed messages can be moved to dead-letter queues.
+* Duplicate event deliveries can be detected.
+* A correlation identifier follows the complete workflow.
 
-This repository is deliberately kept small enough to understand while still demonstrating patterns used in larger distributed systems.
+---
+
+## Current workflow
+
+### Successful order
+
+```text
+OrderCreated
+    ↓
+PaymentAuthorized
+    ↓
+InventoryReserved
+    ↓
+DeliveryBooked
+    ↓
+Customer notification stored
+```
+
+### Insufficient inventory
+
+```text
+OrderCreated
+    ↓
+PaymentAuthorized
+    ↓
+InventoryReservationFailed
+    ↓
+Customer notification stored
+```
+
+The Notification Service currently stores notifications in memory. It does not publish a separate `CustomerNotified` domain event.
 
 ---
 
 ## What the project demonstrates
 
-| Area              | Demonstrated concept                               |
-| ----------------- | -------------------------------------------------- |
-| Architecture      | Event-driven microservices                         |
-| Communication     | Asynchronous messaging through RabbitMQ            |
-| Service design    | Independent service responsibilities               |
-| Contracts         | Shared and typed event contracts                   |
-| Reliability       | Connection retry and dead-letter handling          |
-| Consistency       | Idempotent message processing                      |
-| Routing           | Topic-based event routing                          |
-| Development       | TypeScript monorepo with npm workspaces            |
-| Local environment | RabbitMQ through Docker Compose                    |
-| API               | Express-based HTTP endpoints                       |
-| Maintainability   | Shared messaging package and centralized contracts |
+| Area                 | Demonstrated concept                           |
+| -------------------- | ---------------------------------------------- |
+| Architecture         | Event-driven services                          |
+| Communication        | Asynchronous RabbitMQ messaging                |
+| Contracts            | Shared and typed TypeScript event definitions  |
+| Routing              | Topic exchange and explicit routing keys       |
+| Reliability          | Connection retry and dead-letter handling      |
+| Consistency          | Idempotent event processing                    |
+| Traceability         | Correlation identifiers across services        |
+| Service design       | Independent business responsibilities          |
+| API design           | Express-based HTTP endpoints                   |
+| Development          | TypeScript monorepo using npm workspaces       |
+| Local infrastructure | RabbitMQ through Docker Compose                |
+| Automation           | GitHub Actions validation on Node.js 20 and 22 |
 
 ---
 
@@ -86,114 +134,205 @@ This repository is deliberately kept small enough to understand while still demo
 flowchart LR
     Client[API Client]
 
-    subgraph OrderDomain[Order domain]
-        OrderService[Order Service]
-    end
+    Order[Order Service<br/>Port 3001]
+    Payment[Payment Service<br/>Port 3002]
+    Inventory[Inventory Service<br/>Port 3003]
+    Delivery[Delivery Service<br/>Port 3004]
+    Notification[Notification Service<br/>Port 3005]
 
-    subgraph Messaging[Messaging infrastructure]
-        Exchange[(RabbitMQ<br/>commerce.events)]
-        DeadLetter[(Dead-letter handling)]
-    end
+    Stock[(In-memory stock)]
+    Notifications[(In-memory notifications)]
 
-    subgraph PaymentDomain[Payment domain]
-        PaymentService[Payment Service]
-    end
+    Exchange[(RabbitMQ<br/>commerce.events)]
+    DLQ[(Dead-letter queues)]
 
-    subgraph InventoryDomain[Inventory domain]
-        InventoryService[Inventory Service]
-        Stock[(In-memory stock)]
-    end
+    Client -->|POST /orders| Order
 
-    Client -->|POST /orders| OrderService
+    Order -->|order.created| Exchange
+    Exchange -->|OrderCreated| Payment
 
-    OrderService -->|order.created| Exchange
-    Exchange -->|OrderCreated| PaymentService
+    Payment -->|payment.authorized| Exchange
+    Exchange -->|PaymentAuthorized| Inventory
 
-    PaymentService -->|payment.authorized| Exchange
-    Exchange -->|PaymentAuthorized| InventoryService
+    Inventory --> Stock
 
-    InventoryService --> Stock
-    InventoryService -->|inventory.reserved| Exchange
-    InventoryService -->|inventory.reservation.failed| Exchange
+    Inventory -->|inventory.reserved| Exchange
+    Exchange -->|InventoryReserved| Delivery
 
-    Exchange -. failed messages .-> DeadLetter
+    Delivery -->|delivery.booked| Exchange
+    Exchange -->|DeliveryBooked| Notification
+
+    Inventory -->|inventory.reservation.failed| Exchange
+    Exchange -->|InventoryReservationFailed| Notification
+
+    Notification --> Notifications
+
+    Exchange -. failed processing .-> DLQ
 ```
 
 ### Architectural direction
 
-CommerceFlow separates the system into business-focused services rather than technical layers shared by the entire application.
-
 Each service:
 
 * Runs as an independent Node.js process.
-* Owns its own business responsibility.
+* Owns one focused business responsibility.
 * Subscribes only to relevant events.
-* Publishes the result of its work as a new event.
-* Uses shared infrastructure without sharing business logic.
+* Publishes the result of its work as a new event when required.
+* Preserves the workflow correlation identifier.
+* Uses shared messaging infrastructure without sharing business behaviour.
 * Can evolve independently within the boundaries of its event contracts.
 
 ---
 
 ## Services
 
-### Order Service
+## Order Service
 
 **Default port:** `3001`
 
-The Order Service is the entry point for the demo workflow.
+The Order Service is the HTTP entry point for the workflow.
 
-Responsibilities:
+### Responsibilities
 
-* Exposes the order HTTP endpoint.
-* Validates incoming order data.
-* Creates the order identifier.
-* Registers the new order.
+* Exposes `POST /orders`.
+* Exposes `GET /health`.
+* Validates incoming order requests.
+* Generates the order identifier.
+* Calculates the total order amount.
+* Reads or creates a correlation identifier.
 * Publishes `OrderCreated`.
+* Returns the created order information to the client.
 
-The service does not contact the Payment Service directly. Once the event has been published, the Order Service has completed its immediate responsibility.
+### Endpoints
+
+| Method | Endpoint  | Purpose                                        |
+| ------ | --------- | ---------------------------------------------- |
+| `GET`  | `/health` | Returns service health information             |
+| `POST` | `/orders` | Creates an order and starts the event workflow |
+
+The service does not call the Payment Service directly. Its responsibility ends when the order has been created and the event has been published.
 
 ---
 
-### Payment Service
+## Payment Service
 
 **Default port:** `3002`
 
-The Payment Service reacts to newly created orders.
+The Payment Service reacts to new orders.
 
-Responsibilities:
+### Responsibilities
 
+* Exposes `GET /health`.
 * Subscribes to `OrderCreated`.
 * Simulates payment authorization.
-* Produces a payment result.
+* Creates a payment identifier.
+* Preserves the original order items.
 * Publishes `PaymentAuthorized`.
-* Avoids processing the same message more than once.
 
-Payment processing is intentionally simulated. The purpose of the service is to demonstrate event handling and service collaboration rather than integration with a real payment provider.
+### Endpoints
+
+| Method | Endpoint  | Purpose                            |
+| ------ | --------- | ---------------------------------- |
+| `GET`  | `/health` | Returns service health information |
+
+Payment authorization is deliberately simulated. The purpose is to demonstrate service collaboration and event handling rather than integration with a real payment provider.
 
 ---
 
-### Inventory Service
+## Inventory Service
 
 **Default port:** `3003`
 
-The Inventory Service owns the available stock used by the demo.
+The Inventory Service owns the current demo stock.
 
-Responsibilities:
+### Responsibilities
 
+* Exposes `GET /health`.
+* Exposes `GET /stock`.
 * Subscribes to `PaymentAuthorized`.
-* Checks whether the requested quantity is available.
-* Reserves stock when sufficient inventory exists.
-* Rejects the reservation when inventory is insufficient.
-* Publishes either `InventoryReserved` or `InventoryReservationFailed`.
-* Exposes the current stock through `GET /stock`.
+* Checks every requested order item.
+* Reserves stock when all products are available.
+* Leaves stock unchanged when any item is unavailable.
+* Publishes `InventoryReserved` on success.
+* Publishes `InventoryReservationFailed` on failure.
 
-The current implementation uses in-memory inventory. This keeps the example focused on messaging and workflow design.
+### Endpoints
+
+| Method | Endpoint  | Purpose                             |
+| ------ | --------- | ----------------------------------- |
+| `GET`  | `/health` | Returns service health information  |
+| `GET`  | `/stock`  | Returns the current in-memory stock |
+
+### Initial stock
+
+| Product              | Quantity |
+| -------------------- | -------: |
+| `washing-machine-01` |       10 |
+| `dishwasher-01`      |        5 |
+| `dryer-01`           |        3 |
+
+Inventory is currently stored in memory and is reset whenever the service restarts.
+
+---
+
+## Delivery Service
+
+**Default port:** `3004`
+
+The Delivery Service reacts to successful inventory reservations.
+
+### Responsibilities
+
+* Exposes `GET /health`.
+* Subscribes to `InventoryReserved`.
+* Creates a delivery identifier.
+* Selects a simulated carrier.
+* Calculates an estimated delivery date.
+* Publishes `DeliveryBooked`.
+
+### Endpoints
+
+| Method | Endpoint  | Purpose                            |
+| ------ | --------- | ---------------------------------- |
+| `GET`  | `/health` | Returns service health information |
+
+The current implementation uses `DefaultCarrier` and calculates the estimated delivery date as three days after the booking date.
+
+This is intentionally simple because the project focuses on event flow rather than integration with a real shipping provider.
+
+---
+
+## Notification Service
+
+**Default port:** `3005`
+
+The Notification Service creates customer-facing notification records based on workflow outcomes.
+
+### Responsibilities
+
+* Exposes `GET /health`.
+* Exposes `GET /notifications`.
+* Subscribes to `DeliveryBooked`.
+* Subscribes to `InventoryReservationFailed`.
+* Creates a success notification when delivery is booked.
+* Creates a failure notification when stock cannot be reserved.
+* Stores notifications in memory.
+* Preserves the workflow correlation identifier.
+
+### Endpoints
+
+| Method | Endpoint         | Purpose                                     |
+| ------ | ---------------- | ------------------------------------------- |
+| `GET`  | `/health`        | Returns service health information          |
+| `GET`  | `/notifications` | Returns all current in-memory notifications |
+
+The current version does not send real email, SMS or push notifications.
 
 ---
 
 ## Event flow
 
-### Successful reservation
+### Successful workflow
 
 ```mermaid
 sequenceDiagram
@@ -204,22 +343,31 @@ sequenceDiagram
     participant Broker as RabbitMQ
     participant Payment as Payment Service
     participant Inventory as Inventory Service
+    participant Delivery as Delivery Service
+    participant Notification as Notification Service
 
     Client->>Order: POST /orders
-    Order->>Order: Create order
+    Order->>Order: Validate and calculate total
     Order->>Broker: Publish OrderCreated
-    Order-->>Client: Return accepted order
+    Order-->>Client: 201 Created
 
     Broker->>Payment: Deliver OrderCreated
-    Payment->>Payment: Authorize payment
+    Payment->>Payment: Simulate authorization
     Payment->>Broker: Publish PaymentAuthorized
 
     Broker->>Inventory: Deliver PaymentAuthorized
     Inventory->>Inventory: Check and reserve stock
     Inventory->>Broker: Publish InventoryReserved
+
+    Broker->>Delivery: Deliver InventoryReserved
+    Delivery->>Delivery: Book delivery
+    Delivery->>Broker: Publish DeliveryBooked
+
+    Broker->>Notification: Deliver DeliveryBooked
+    Notification->>Notification: Store customer notification
 ```
 
-### Failed reservation
+### Failed inventory workflow
 
 ```mermaid
 sequenceDiagram
@@ -230,118 +378,211 @@ sequenceDiagram
     participant Broker as RabbitMQ
     participant Payment as Payment Service
     participant Inventory as Inventory Service
+    participant Notification as Notification Service
 
     Client->>Order: POST /orders
     Order->>Broker: Publish OrderCreated
+    Order-->>Client: 201 Created
 
     Broker->>Payment: Deliver OrderCreated
     Payment->>Broker: Publish PaymentAuthorized
 
     Broker->>Inventory: Deliver PaymentAuthorized
-    Inventory->>Inventory: Check available quantity
+    Inventory->>Inventory: Detect insufficient stock
     Inventory->>Broker: Publish InventoryReservationFailed
+
+    Broker->>Notification: Deliver InventoryReservationFailed
+    Notification->>Notification: Store failure notification
 ```
 
 ---
 
 ## Events
 
-The services communicate through the `commerce.events` exchange.
+All domain events are published through the durable topic exchange:
 
-| Routing key                    | Event                        | Publisher         | Consumer          |
-| ------------------------------ | ---------------------------- | ----------------- | ----------------- |
-| `order.created`                | `OrderCreated`               | Order Service     | Payment Service   |
-| `payment.authorized`           | `PaymentAuthorized`          | Payment Service   | Inventory Service |
-| `inventory.reserved`           | `InventoryReserved`          | Inventory Service | Future consumers  |
-| `inventory.reservation.failed` | `InventoryReservationFailed` | Inventory Service | Future consumers  |
+```text
+commerce.events
+```
 
-### Example event progression
+| Routing key                    | Event                        | Publisher         | Consumer             |
+| ------------------------------ | ---------------------------- | ----------------- | -------------------- |
+| `order.created`                | `OrderCreated`               | Order Service     | Payment Service      |
+| `payment.authorized`           | `PaymentAuthorized`          | Payment Service   | Inventory Service    |
+| `inventory.reserved`           | `InventoryReserved`          | Inventory Service | Delivery Service     |
+| `inventory.reservation.failed` | `InventoryReservationFailed` | Inventory Service | Notification Service |
+| `delivery.booked`              | `DeliveryBooked`             | Delivery Service  | Notification Service |
+
+### Shared event envelope
+
+Every event contains:
+
+```ts
+interface DomainEvent<TEventType, TData> {
+    eventId: string;
+    eventType: TEventType;
+    occurredAt: string;
+    correlationId: string;
+    data: TData;
+}
+```
+
+The envelope provides:
+
+* A unique event identifier
+* A typed event name
+* A timestamp
+* A workflow correlation identifier
+* Event-specific data
+
+### Event naming
+
+Events describe facts that have already occurred and are therefore named in the past tense:
 
 ```text
 OrderCreated
-    ↓
 PaymentAuthorized
-    ↓
 InventoryReserved
+InventoryReservationFailed
+DeliveryBooked
 ```
 
-Or, when stock is insufficient:
+---
+
+## Correlation identifiers
+
+The Order Service reads an optional correlation identifier from:
+
+```text
+x-correlation-id
+```
+
+When the request does not contain one, the service generates a new UUID.
+
+The same value is then carried through:
 
 ```text
 OrderCreated
     ↓
 PaymentAuthorized
     ↓
-InventoryReservationFailed
+InventoryReserved or InventoryReservationFailed
+    ↓
+DeliveryBooked
+    ↓
+Notification record
 ```
 
-Events represent facts that have already occurred. Their names are therefore written in the past tense.
+This makes it possible to follow one workflow across several independently running services.
 
 ---
 
 ## Reliability
 
-Distributed systems introduce failure scenarios that do not exist in the same way inside a single process.
+Distributed systems introduce failure cases that do not exist in the same way inside a single process.
 
-CommerceFlow includes reliability mechanisms intended to make those scenarios visible and manageable.
+CommerceFlow includes several mechanisms that make these scenarios visible and manageable.
 
 ### RabbitMQ connection retry
 
 A service may start before RabbitMQ is ready.
 
-Instead of failing permanently on the first unsuccessful connection attempt, the messaging layer retries the connection. This is particularly relevant when the complete environment is started through Docker or several local processes.
+The shared messaging client retries failed connection attempts instead of failing permanently after the first attempt.
 
-### Dead-letter handling
+The current defaults are:
 
-Messages that cannot be processed successfully should not disappear silently.
+```text
+Maximum attempts: 10
+Delay between attempts: 2000 milliseconds
+```
 
-Dead-letter handling provides a separate destination for messages that have exhausted their allowed processing attempts or cannot be handled by the normal consumer flow.
+---
 
-This allows failed messages to be:
+### Durable exchange and queues
 
-* Inspected
-* Logged
-* Diagnosed
-* Replayed manually
-* Handled by future operational tooling
+The main exchange and service queues are declared as durable.
 
-### Idempotent message handling
+Published messages use persistent delivery mode.
 
-RabbitMQ can redeliver a message when a consumer fails before acknowledging it.
+This allows RabbitMQ to preserve the configured messaging topology and makes messages more resilient to broker restarts.
 
-A consumer must therefore assume that the same event may arrive more than once.
+Persistence still depends on the complete RabbitMQ deployment and storage configuration.
 
-Idempotent handling prevents a duplicate delivery from producing duplicate business effects, such as:
+---
 
-* Authorizing the same payment twice
-* Reserving the same stock twice
-* Sending the same notification repeatedly
+### Explicit acknowledgements
 
-The current implementation demonstrates this principle within the scope of the demo. A production implementation would normally persist processed message identifiers in durable storage.
-
-### Message acknowledgement
-
-A message should only be acknowledged after the consumer has completed its processing successfully.
+Messages are acknowledged only after the consumer handler completes successfully.
 
 Conceptually:
 
 ```text
 Receive message
     ↓
-Validate message
+Parse event
+    ↓
+Validate event identifier
     ↓
 Check idempotency
     ↓
-Perform business operation
+Execute handler
     ↓
-Publish resulting event
+Publish resulting event when required
     ↓
-Mark message as processed
+Mark event as processed
     ↓
 Acknowledge message
 ```
 
-If processing fails before acknowledgement, the broker can redeliver or dead-letter the message according to the configured policy.
+When processing fails, the message is rejected without requeueing and is routed to the queue-specific dead-letter queue.
+
+---
+
+### Dead-letter handling
+
+Each subscriber queue receives its own dead-letter queue.
+
+The naming pattern is:
+
+```text
+<queue-name>.dead-letter
+```
+
+Examples:
+
+```text
+payment-service.order-created.dead-letter
+inventory-service.payment-authorized.dead-letter
+delivery-service.inventory-reserved.dead-letter
+notification-service.customer-events.dead-letter
+```
+
+Failed messages can then be:
+
+* Inspected
+* Diagnosed
+* Logged
+* Replayed manually
+* Processed by future recovery tooling
+
+---
+
+### Idempotent processing
+
+RabbitMQ may redeliver a message if processing is interrupted before acknowledgement.
+
+The shared messaging client keeps processed event identifiers per queue and acknowledges duplicate events without running the handler again.
+
+This prevents duplicate effects during the current process lifetime, such as:
+
+* Authorizing the same payment twice
+* Reserving the same inventory twice
+* Booking the same delivery twice
+* Creating the same notification twice
+
+The current idempotency store is in memory.
+
+A production implementation should use persistent storage because the in-memory record is lost when a service restarts.
 
 ---
 
@@ -349,40 +590,54 @@ If processing fails before acknowledgement, the broker can redeliver or dead-let
 
 ```text
 commerce-flow/
-├── packages/
+├── .github/
+│   └── workflows/
+│       └── ci.yml
+│
+├── shared/
 │   ├── contracts/
-│   │   └── Shared event contracts and routing keys
+│   │   ├── src/
+│   │   │   ├── events.ts
+│   │   │   └── index.ts
+│   │   ├── package.json
+│   │   └── tsconfig.json
 │   │
 │   └── messaging/
-│       └── Shared RabbitMQ connection, publishing and consuming
+│       ├── src/
+│       │   ├── rabbitMqClient.ts
+│       │   └── index.ts
+│       ├── package.json
+│       └── tsconfig.json
 │
 ├── services/
 │   ├── order-service/
-│   │   └── Order API and OrderCreated publishing
-│   │
 │   ├── payment-service/
-│   │   └── Payment processing and PaymentAuthorized publishing
-│   │
-│   └── inventory-service/
-│       └── Stock management and inventory result events
+│   ├── inventory-service/
+│   ├── delivery-service/
+│   └── notification-service/
 │
 ├── docker-compose.yml
 ├── package.json
+├── package-lock.json
 ├── tsconfig.base.json
 └── README.md
 ```
 
 ### Workspace responsibilities
 
-| Workspace                          | Responsibility                                    |
-| ---------------------------------- | ------------------------------------------------- |
-| `@commerce-flow/contracts`         | Event types, payload definitions and routing keys |
-| `@commerce-flow/messaging`         | RabbitMQ infrastructure shared by the services    |
-| `@commerce-flow/order-service`     | Order creation and order events                   |
-| `@commerce-flow/payment-service`   | Payment authorization and payment events          |
-| `@commerce-flow/inventory-service` | Stock reservation and inventory events            |
+| Workspace                             | Responsibility                                                 |
+| ------------------------------------- | -------------------------------------------------------------- |
+| `@commerce-flow/contracts`            | Shared event envelopes, payloads and event types               |
+| `@commerce-flow/messaging`            | RabbitMQ connection, publishing, subscriptions and reliability |
+| `@commerce-flow/order-service`        | Order creation and `OrderCreated` publishing                   |
+| `@commerce-flow/payment-service`      | Payment authorization and `PaymentAuthorized` publishing       |
+| `@commerce-flow/inventory-service`    | Stock reservation and inventory result events                  |
+| `@commerce-flow/delivery-service`     | Delivery booking and `DeliveryBooked` publishing               |
+| `@commerce-flow/notification-service` | Customer notification creation for workflow outcomes           |
 
-The shared packages contain technical building blocks and communication contracts. Business behaviour remains inside the individual services.
+Shared packages contain technical infrastructure and communication contracts.
+
+Business behaviour remains inside the individual services.
 
 ---
 
@@ -390,8 +645,9 @@ The shared packages contain technical building blocks and communication contract
 
 ### Runtime and language
 
-* Node.js
+* Node.js 20 or newer
 * TypeScript
+* ECMAScript modules
 * npm workspaces
 
 ### APIs
@@ -404,9 +660,12 @@ The shared packages contain technical building blocks and communication contract
 * RabbitMQ
 * Topic exchange
 * Durable queues
+* Persistent messages
 * Explicit routing keys
-* Message acknowledgement
-* Dead-letter handling
+* Manual acknowledgements
+* Dead-letter queues
+* Correlation identifiers
+* Idempotent consumers
 
 ### Local infrastructure
 
@@ -414,13 +673,15 @@ The shared packages contain technical building blocks and communication contract
 * Docker Compose
 * RabbitMQ Management UI
 
-### Development quality
+### Automation
 
-* Shared TypeScript configuration
+* GitHub Actions
+* Node.js 20 validation
+* Node.js 22 validation
+* Reproducible installation through `npm ci`
 * Type checking
-* Typed event contracts
-* Centralized messaging abstractions
-* Independently running services
+* Workspace builds
+* Automatic execution of workspace test scripts when present
 
 ---
 
@@ -428,16 +689,16 @@ The shared packages contain technical building blocks and communication contract
 
 ### Prerequisites
 
-Install the following tools:
+Install:
 
-* Node.js using a current LTS release
+* Node.js 20 or newer
 * npm
 * Docker Desktop or another Docker-compatible runtime
 * Git
 
 Verify the installations:
 
-```bash
+```powershell
 node --version
 npm --version
 docker --version
@@ -449,101 +710,136 @@ git --version
 
 ### 1. Clone the repository
 
-```bash
-git clone <repository-url>
+```powershell
+git clone https://github.com/kris7011/commerce-flow.git
 cd commerce-flow
 ```
-
-Replace `<repository-url>` with the repository URL from GitHub.
 
 ---
 
 ### 2. Install dependencies
 
-Run this command from the repository root:
-
-```bash
+```powershell
 npm install
 ```
 
-npm installs the dependencies for the root project and all configured workspaces.
+For a clean installation based strictly on `package-lock.json`:
+
+```powershell
+npm ci
+```
 
 ---
 
 ### 3. Start RabbitMQ
 
-```bash
+```powershell
 docker compose up -d
 ```
 
-Check that the container is running:
+Check the running container:
 
-```bash
+```powershell
 docker compose ps
 ```
 
-View the RabbitMQ container logs when needed:
+RabbitMQ uses:
 
-```bash
-docker compose logs -f
-```
+| Purpose              | Address                  |
+| -------------------- | ------------------------ |
+| AMQP connection      | `localhost:5672`         |
+| Management interface | `http://localhost:15672` |
 
-The RabbitMQ Management UI is normally available at:
+Default local credentials:
 
 ```text
-http://localhost:15672
+Username: guest
+Password: guest
 ```
 
-The local development credentials are defined in `docker-compose.yml`.
-
-Do not reuse local demo credentials in a deployed environment.
+These credentials are only suitable for local development.
 
 ---
 
 ### 4. Start the services
 
-Open three terminals in the repository root.
+Open five terminals in the repository root.
 
 #### Terminal 1 — Order Service
 
-```bash
+```powershell
 npm run dev:order
 ```
 
 #### Terminal 2 — Payment Service
 
-```bash
+```powershell
 npm run dev:payment
 ```
 
 #### Terminal 3 — Inventory Service
 
-```bash
+```powershell
 npm run dev:inventory
 ```
 
-Expected local endpoints:
+#### Terminal 4 — Delivery Service
 
-| Service             | Address                  |
-| ------------------- | ------------------------ |
-| Order Service       | `http://localhost:3001`  |
-| Payment Service     | `http://localhost:3002`  |
-| Inventory Service   | `http://localhost:3003`  |
-| RabbitMQ Management | `http://localhost:15672` |
+```powershell
+npm run dev:delivery
+```
+
+#### Terminal 5 — Notification Service
+
+```powershell
+npm run dev:notification
+```
+
+### Local service addresses
+
+| Service              | Address                  |
+| -------------------- | ------------------------ |
+| Order Service        | `http://localhost:3001`  |
+| Payment Service      | `http://localhost:3002`  |
+| Inventory Service    | `http://localhost:3003`  |
+| Delivery Service     | `http://localhost:3004`  |
+| Notification Service | `http://localhost:3005`  |
+| RabbitMQ Management  | `http://localhost:15672` |
+
+---
+
+## Health checks
+
+Check all services from PowerShell:
+
+```powershell
+Invoke-RestMethod -Uri "http://localhost:3001/health"
+Invoke-RestMethod -Uri "http://localhost:3002/health"
+Invoke-RestMethod -Uri "http://localhost:3003/health"
+Invoke-RestMethod -Uri "http://localhost:3004/health"
+Invoke-RestMethod -Uri "http://localhost:3005/health"
+```
+
+A healthy service returns a response similar to:
+
+```json
+{
+  "status": "Healthy",
+  "service": "order-service"
+}
+```
+
+The health endpoints currently confirm that the HTTP process is running.
+
+They do not yet verify all downstream dependencies such as RabbitMQ connectivity.
 
 ---
 
 ## Running the demo
 
+## Successful order
+
 ### 1. Inspect the initial stock
-
-Using curl:
-
-```bash
-curl http://localhost:3003/stock
-```
-
-Using PowerShell:
 
 ```powershell
 Invoke-RestMethod `
@@ -551,49 +847,58 @@ Invoke-RestMethod `
     -Method Get
 ```
 
-The demo inventory includes products such as:
+Expected initial stock:
 
-```text
-washing-machine-01
-dishwasher-01
-dryer-01
+```json
+{
+  "stock": {
+    "washing-machine-01": 10,
+    "dishwasher-01": 5,
+    "dryer-01": 3
+  }
+}
 ```
-
----
 
 ### 2. Create an order
-
-Example request:
-
-```bash
-curl --request POST http://localhost:3001/orders \
-  --header "Content-Type: application/json" \
-  --data '{
-    "customerId": "customer-001",
-    "productId": "washing-machine-01",
-    "quantity": 1
-  }'
-```
-
-PowerShell equivalent:
 
 ```powershell
 $body = @{
     customerId = "customer-001"
-    productId  = "washing-machine-01"
-    quantity   = 1
-} | ConvertTo-Json
+    items = @(
+        @{
+            productId = "washing-machine-01"
+            quantity = 1
+            unitPrice = 4999.00
+        }
+    )
+} | ConvertTo-Json -Depth 4
 
-Invoke-RestMethod `
+$orderResponse = Invoke-RestMethod `
     -Uri "http://localhost:3001/orders" `
     -Method Post `
     -ContentType "application/json" `
+    -Headers @{
+        "x-correlation-id" = "demo-success-001"
+    } `
     -Body $body
+
+$orderResponse
 ```
 
-After the request, follow the terminal output from all three services.
+Expected response structure:
 
-The expected event progression is:
+```json
+{
+  "orderId": "generated-order-id",
+  "status": "Created",
+  "totalAmount": 4999,
+  "correlationId": "demo-success-001"
+}
+```
+
+### 3. Follow the service logs
+
+The expected progression is:
 
 ```text
 Order Service
@@ -606,64 +911,199 @@ Payment Service
 Inventory Service
 └── consumes PaymentAuthorized
     └── publishes InventoryReserved
+
+Delivery Service
+└── consumes InventoryReserved
+    └── publishes DeliveryBooked
+
+Notification Service
+└── consumes DeliveryBooked
+    └── stores customer notification
 ```
+
+### 4. Verify the updated stock
+
+```powershell
+Invoke-RestMethod `
+    -Uri "http://localhost:3003/stock" `
+    -Method Get
+```
+
+The quantity of `washing-machine-01` should now be `9`.
+
+### 5. Inspect notifications
+
+```powershell
+Invoke-RestMethod `
+    -Uri "http://localhost:3005/notifications" `
+    -Method Get
+```
+
+The result should contain a delivery notification with:
+
+* The generated order identifier
+* `DeliveryBooked` as its type
+* `DefaultCarrier`
+* The estimated delivery date
+* The original correlation identifier
 
 ---
 
-### 3. Verify the updated stock
+## Failed inventory reservation
 
-```bash
-curl http://localhost:3003/stock
+Create an order requesting more units than the current stock contains:
+
+```powershell
+$body = @{
+    customerId = "customer-002"
+    items = @(
+        @{
+            productId = "dryer-01"
+            quantity = 99
+            unitPrice = 2999.00
+        }
+    )
+} | ConvertTo-Json -Depth 4
+
+$orderResponse = Invoke-RestMethod `
+    -Uri "http://localhost:3001/orders" `
+    -Method Post `
+    -ContentType "application/json" `
+    -Headers @{
+        "x-correlation-id" = "demo-failure-001"
+    } `
+    -Body $body
+
+$orderResponse
 ```
 
-The available quantity for the ordered product should have decreased.
-
----
-
-### 4. Test insufficient inventory
-
-Create an order with a quantity greater than the available stock:
-
-```bash
-curl --request POST http://localhost:3001/orders \
-  --header "Content-Type: application/json" \
-  --data '{
-    "customerId": "customer-002",
-    "productId": "dryer-01",
-    "quantity": 99
-  }'
-```
-
-The expected result is:
+Expected progression:
 
 ```text
+OrderCreated
+    ↓
+PaymentAuthorized
+    ↓
 InventoryReservationFailed
+    ↓
+Failure notification stored
 ```
 
-The inventory quantity must remain unchanged when the reservation fails.
+Inspect the notifications:
+
+```powershell
+Invoke-RestMethod `
+    -Uri "http://localhost:3005/notifications" `
+    -Method Get
+```
+
+The failed reservation notification contains:
+
+* The affected order identifier
+* `InventoryReservationFailed` as its type
+* The failure reason
+* Requested and available quantities
+* The workflow correlation identifier
+
+The stock remains unchanged when the reservation fails.
 
 ---
 
-## Type checking
+## Validation commands
 
-Run TypeScript verification across the project:
+### Type checking
 
-```bash
+```powershell
 npm run typecheck
 ```
 
-Type checking helps detect:
+This executes the `typecheck` script in every workspace that defines one.
+
+Type checking detects issues such as:
 
 * Invalid event payloads
+* Missing event properties
 * Incorrect imports
 * Contract mismatches
-* Missing properties
 * Invalid function arguments
 * Incompatible return types
 
-A successful result confirms that the TypeScript workspaces agree on the current contracts.
+---
 
-Type checking does not replace automated behavioural tests. Unit and integration test coverage are included in the project roadmap.
+### Build
+
+```powershell
+npm run build
+```
+
+This compiles all workspaces that define a build script.
+
+---
+
+### Tests
+
+```powershell
+npm test
+```
+
+The root command executes test scripts in workspaces where they exist.
+
+Automated behavioural tests have not yet been implemented, so the current command may complete without executing test cases.
+
+Tests are included in the roadmap.
+
+---
+
+### Dependency audit
+
+```powershell
+npm audit
+```
+
+The repository currently uses a patched `body-parser` dependency and should report no known vulnerabilities for the installed dependency tree.
+
+---
+
+## Continuous integration
+
+The GitHub Actions workflow is located at:
+
+```text
+.github/workflows/ci.yml
+```
+
+It runs for:
+
+* Pushes to `main`
+* Pull requests targeting `main`
+* Manual workflow execution
+
+The workflow validates the project on:
+
+```text
+Node.js 20.x
+Node.js 22.x
+```
+
+Each matrix job performs:
+
+```text
+npm ci
+    ↓
+npm run typecheck
+    ↓
+npm run build
+    ↓
+npm test
+```
+
+The jobs use:
+
+* Read-only repository permissions
+* npm dependency caching
+* A ten-minute timeout
+* Cancellation of outdated workflow runs on the same reference
+* Independent reporting for both Node.js versions
 
 ---
 
@@ -671,58 +1111,60 @@ Type checking does not replace automated behavioural tests. Unit and integration
 
 ### Why asynchronous events?
 
-Direct HTTP communication would make the services depend on one another’s availability and API structure.
+Direct HTTP communication would make each service depend on:
 
-Events reduce this coupling.
+* The next service being online
+* The next service’s network location
+* Its HTTP endpoint structure
+* Its response format
+* Its implementation details
 
-The Order Service only needs to know how to publish `OrderCreated`. It does not need to know:
+With events, the Order Service only needs to know how to publish `OrderCreated`.
 
-* Where the Payment Service is running
-* Which HTTP endpoint the Payment Service exposes
-* How the Payment Service is implemented
-* Whether additional consumers also use the event
+It does not need to know:
 
-This makes it possible to add future consumers without changing the original publisher.
+* Where the Payment Service runs
+* Whether the Payment Service is currently available
+* Which other consumers use the same event
+* How payment authorization is implemented
 
 ---
 
 ### Why RabbitMQ?
 
-RabbitMQ provides the messaging capabilities required by the project without introducing unnecessary infrastructure complexity.
+RabbitMQ provides the messaging capabilities required by the project without introducing excessive infrastructure complexity.
 
 Relevant features include:
 
 * Exchanges
 * Queues
-* Routing keys
-* Consumer acknowledgements
-* Message redelivery
-* Durable messaging
+* Topic routing
+* Durable topology
+* Message acknowledgement
+* Redelivery
 * Dead-letter exchanges
-* Local management interface
-
-RabbitMQ is therefore a suitable choice for demonstrating asynchronous service communication and failure handling.
+* Persistent messages
+* A local management interface
 
 ---
 
 ### Why a topic exchange?
 
-A topic exchange routes messages through explicit routing keys such as:
+The topic exchange routes events through explicit routing keys:
 
 ```text
 order.created
 payment.authorized
 inventory.reserved
 inventory.reservation.failed
+delivery.booked
 ```
 
-This naming structure makes the event category and outcome visible while allowing consumers to subscribe to either exact events or broader routing patterns.
+This makes the business meaning visible and allows consumers to subscribe to exact events or broader patterns.
 
-Examples:
+Example:
 
 ```text
-inventory.reserved
-inventory.reservation.failed
 inventory.*
 ```
 
@@ -730,18 +1172,16 @@ inventory.*
 
 ### Why shared contracts?
 
-Without shared contracts, the publisher and consumer could silently disagree about an event payload.
+Without shared contracts, publishers and consumers could silently disagree about event payloads.
 
-The contracts package provides:
+The contracts workspace provides:
 
-* Consistent event names
-* Consistent routing keys
+* Shared event names
 * Shared TypeScript payload types
-* Compile-time feedback when contracts change
+* A consistent event envelope
+* Compile-time feedback when a contract changes
 
-The package contains communication definitions, not shared business logic.
-
-This distinction is important because sharing domain behaviour across services would reduce their independence.
+It contains communication definitions, not shared business behaviour.
 
 ---
 
@@ -749,167 +1189,136 @@ This distinction is important because sharing domain behaviour across services w
 
 RabbitMQ connection and channel management are infrastructure concerns.
 
-Centralizing them avoids duplicating code for:
+The messaging workspace centralizes:
 
-* Broker connections
-* Retry behaviour
-* Exchange declaration
-* Queue declaration
-* Publishing
-* Consuming
+* Connection retry
+* Exchange creation
+* Queue creation
+* Queue binding
+* Message publication
+* Message consumption
 * Acknowledgement
-* Error handling
 * Dead-letter configuration
+* Duplicate event detection
+* Connection shutdown
 
-The services depend on a reusable messaging abstraction while keeping their domain behaviour local.
+This avoids duplicating the same infrastructure code in every service.
 
 ---
 
 ### Why a monorepo?
 
-The monorepo keeps a small demonstration project easy to install, run and inspect.
+The monorepo keeps the demonstration easy to install, run and inspect.
 
 Benefits include:
 
 * One dependency installation
 * Shared TypeScript configuration
 * Atomic contract changes
-* Consistent development scripts
+* Consistent scripts
 * Easier local development
-* A complete event flow in one repository
+* One repository containing the complete workflow
 
-The services remain independently runnable even though their source code is stored together.
-
-For a larger organization, separate repositories could be considered when service ownership, release cycles or access boundaries require it.
+The services still run as separate processes.
 
 ---
 
-### Why in-memory state?
+### Why in-memory storage?
 
-Inventory is currently stored in memory to keep the project focused on event-driven architecture.
+Inventory, processed event identifiers and notifications are currently stored in memory.
 
-This is an intentional limitation rather than a recommended production design.
+This keeps the project focused on messaging and service collaboration.
 
-A durable production implementation would require:
+It is an intentional limitation rather than a recommended production design.
 
-* Persistent storage
-* Database transactions
+A production implementation would require:
+
+* Persistent databases
+* Transactions
 * Concurrency control
-* Optimistic or pessimistic locking
 * Durable idempotency records
-* Recovery after service restarts
-
----
-
-## Design principles
-
-### Clear service boundaries
-
-A service should own one coherent business responsibility.
-
-### Loose coupling
-
-Services communicate through contracts rather than implementation details.
-
-### Explicit events
-
-Published events describe facts that have occurred.
-
-### Idempotent consumers
-
-Duplicate delivery must not create duplicate business effects.
-
-### Infrastructure isolation
-
-Messaging-specific code is kept outside the core service behaviour.
-
-### Observable behaviour
-
-Important actions and failures should be visible through structured logs and operational tooling.
-
-### Incremental evolution
-
-The project is developed through focused architectural improvements instead of being presented as an unexplained finished code dump.
+* Recovery after restarts
+* Data migrations
+* Backup and restore procedures
 
 ---
 
 ## Current limitations
 
-CommerceFlow is an architectural demonstration, not a production-ready commerce platform.
+CommerceFlow is an architectural demonstration rather than a production-ready commerce platform.
 
-The current scope does not yet include:
+The current implementation does not yet include:
 
-* Durable business data
+* Persistent business data
+* Durable idempotency
 * Real payment integration
-* Authentication or authorization
-* API rate limiting
+* Real carrier integration
+* Real email, SMS or push notifications
+* Authentication
+* Authorization
+* Rate limiting
+* Transactional outbox
+* Event schema versioning
 * Distributed tracing
 * Centralized metrics
 * Centralized log aggregation
-* Schema registry
-* Transactional outbox
-* Automated end-to-end tests
-* Kubernetes deployment
+* Automated behavioural tests
+* Retry queues with delayed retries
 * Production secret management
-
-Documenting these limitations is important because event-driven systems require more than a message broker to operate reliably in production.
+* Kubernetes deployment
 
 ---
 
 ## Production considerations
 
-Before applying this architecture to a production system, the following areas should be addressed.
-
 ### Transactional outbox
 
-A database update and an event publication cannot normally be committed as one atomic operation.
+A database transaction and a RabbitMQ publication cannot normally be committed atomically.
 
 Without an outbox, a service can:
 
 1. Save its business state.
-2. Fail before publishing the event.
+2. Fail before publishing its event.
 3. Leave downstream services unaware of the completed change.
 
-A transactional outbox would persist the domain change and the outgoing event in the same database transaction.
+A transactional outbox would store the business change and outgoing event in the same database transaction.
 
 ---
 
 ### Durable idempotency
 
-Processed message identifiers should be stored in persistent storage.
+Processed event identifiers should be stored in persistent storage.
 
-An in-memory idempotency record is lost when the service restarts.
+The current in-memory implementation loses its state whenever a service restarts.
 
 ---
 
 ### Event versioning
 
-Contracts must evolve without unexpectedly breaking existing consumers.
+Contracts must be able to evolve without unexpectedly breaking existing consumers.
 
 A future version should define rules for:
 
 * Backward-compatible additions
 * Breaking changes
 * Event version numbers
-* Consumer migration
+* Consumer migrations
 * Deprecated event contracts
 
 ---
 
 ### Observability
 
-A distributed workflow should support correlation across service boundaries.
+A production-oriented version should include:
 
-A production-oriented version would include:
-
-* Correlation identifiers
-* Structured logging
+* Structured JSON logging
 * OpenTelemetry
 * Distributed traces
 * Service metrics
-* Queue depth metrics
+* Queue depth monitoring
 * Dead-letter alerts
-* Health and readiness checks
+* Readiness checks
+* Dependency-aware health checks
 
 ---
 
@@ -919,11 +1328,11 @@ A deployed environment should include:
 
 * Secret management
 * TLS
-* Broker access control
-* Restricted management access
-* Input validation
+* Restricted RabbitMQ accounts
+* Restricted management interface access
 * Authentication
 * Authorization
+* Request size limits
 * Dependency scanning
 * Container image scanning
 
@@ -934,73 +1343,62 @@ A deployed environment should include:
 ### Current foundation
 
 * [x] TypeScript monorepo
+* [x] npm workspaces
 * [x] Shared event contracts
-* [x] Shared RabbitMQ package
+* [x] Shared RabbitMQ client
 * [x] Order Service
 * [x] Payment Service
 * [x] Inventory Service
-* [x] Topic-based routing
+* [x] Delivery Service
+* [x] Notification Service
+* [x] Topic-based event routing
+* [x] Correlation identifiers
 * [x] RabbitMQ connection retry
-* [x] Dead-letter handling
-* [x] Idempotent message processing
+* [x] Queue-specific dead-letter handling
+* [x] In-memory idempotent message handling
+* [x] Health endpoints for all services
 * [x] Docker Compose environment
-* [x] TypeScript type checking
+* [x] Type checking
+* [x] Workspace builds
+* [x] GitHub Actions validation
+* [x] Node.js 20 and 22 CI matrix
+* [x] Dependency vulnerability remediation
 
 ### Next improvements
 
-* [ ] Add unit tests for service-level business logic
+* [ ] Add unit tests for service business logic
 * [ ] Add RabbitMQ integration tests
-* [ ] Add automated end-to-end workflow tests
-* [ ] Add service health endpoints
+* [ ] Add end-to-end workflow tests
+* [ ] Separate HTTP setup from service startup
+* [ ] Add request validation library
 * [ ] Add structured logging
-* [ ] Add correlation identifiers
-* [ ] Add Notification Service
-* [ ] Add Delivery Service
-* [ ] Add GitHub Actions build and type-check workflow
-* [ ] Add automated dependency updates
+* [ ] Add dependency-aware readiness endpoints
+* [ ] Add persistent inventory storage
+* [ ] Add persistent notification storage
+* [ ] Add persistent idempotency records
+* [ ] Add retry queues with controlled delays
 
 ### Advanced reliability
 
-* [ ] Add PostgreSQL persistence
+* [ ] Add PostgreSQL
 * [ ] Add transactional outbox
-* [ ] Add durable inbox and idempotency storage
-* [ ] Add retry queues with controlled delays
+* [ ] Add transactional inbox
 * [ ] Add message replay tooling
 * [ ] Add event contract versioning
 * [ ] Add compensating actions
-* [ ] Explore saga orchestration and choreography
+* [ ] Explore saga orchestration
+* [ ] Explore saga choreography
 
 ### Observability and deployment
 
-* [ ] Add OpenTelemetry instrumentation
+* [ ] Add OpenTelemetry
 * [ ] Add distributed tracing
 * [ ] Add Prometheus metrics
 * [ ] Add Grafana dashboards
 * [ ] Add container health checks
+* [ ] Add Dockerfiles for all services
 * [ ] Add Kubernetes manifests
-* [ ] Add production deployment documentation
-
----
-
-## Suggested future workflow
-
-A future version of CommerceFlow can extend the current event chain:
-
-```mermaid
-flowchart LR
-    Order[OrderCreated]
-    Payment[PaymentAuthorized]
-    Inventory[InventoryReserved]
-    Delivery[DeliveryBooked]
-    Notification[CustomerNotified]
-
-    Order --> Payment
-    Payment --> Inventory
-    Inventory --> Delivery
-    Delivery --> Notification
-```
-
-The important architectural property is that each new capability can be introduced as a consumer without requiring the Order Service to coordinate the entire workflow directly.
+* [ ] Add deployment documentation
 
 ---
 
@@ -1008,56 +1406,98 @@ The important architectural property is that each new capability can be introduc
 
 ### Install dependencies
 
-```bash
+```powershell
 npm install
+```
+
+### Clean dependency installation
+
+```powershell
+npm ci
 ```
 
 ### Start RabbitMQ
 
-```bash
+```powershell
 docker compose up -d
 ```
 
-### Stop RabbitMQ
+### View RabbitMQ status
 
-```bash
-docker compose down
-```
-
-### Stop RabbitMQ and remove local volumes
-
-```bash
-docker compose down --volumes
+```powershell
+docker compose ps
 ```
 
 ### View RabbitMQ logs
 
-```bash
-docker compose logs -f
+```powershell
+docker compose logs -f rabbitmq
+```
+
+### Stop RabbitMQ
+
+```powershell
+docker compose down
+```
+
+### Stop RabbitMQ and remove volumes
+
+```powershell
+docker compose down --volumes
 ```
 
 ### Start Order Service
 
-```bash
+```powershell
 npm run dev:order
 ```
 
 ### Start Payment Service
 
-```bash
+```powershell
 npm run dev:payment
 ```
 
 ### Start Inventory Service
 
-```bash
+```powershell
 npm run dev:inventory
+```
+
+### Start Delivery Service
+
+```powershell
+npm run dev:delivery
+```
+
+### Start Notification Service
+
+```powershell
+npm run dev:notification
 ```
 
 ### Run type checking
 
-```bash
+```powershell
 npm run typecheck
+```
+
+### Build all workspaces
+
+```powershell
+npm run build
+```
+
+### Run workspace tests
+
+```powershell
+npm test
+```
+
+### Audit dependencies
+
+```powershell
+npm audit
 ```
 
 ---
@@ -1066,40 +1506,44 @@ npm run typecheck
 
 ### A service cannot connect to RabbitMQ
 
-Check whether the RabbitMQ container is running:
+Check whether RabbitMQ is running:
 
-```bash
+```powershell
 docker compose ps
 ```
 
-Inspect its logs:
+Inspect the logs:
 
-```bash
+```powershell
 docker compose logs rabbitmq
 ```
 
-Restart the environment:
+Restart RabbitMQ:
 
-```bash
+```powershell
 docker compose down
 docker compose up -d
 ```
+
+Services retry their RabbitMQ connection automatically during startup.
 
 ---
 
 ### A port is already in use
 
-Check whether another process is using one of the service ports:
+Check whether another process is using one of these ports:
 
 ```text
 3001
 3002
 3003
-15672
+3004
+3005
 5672
+15672
 ```
 
-Stop the conflicting process or change the local port configuration.
+Stop the conflicting process or override the relevant service port environment variable.
 
 ---
 
@@ -1107,36 +1551,51 @@ Stop the conflicting process or change the local port configuration.
 
 Check:
 
-1. Whether all services are running.
+1. Whether all five services are running.
 2. Whether RabbitMQ is available.
 3. Whether the expected queues have been declared.
-4. Whether bindings use the correct routing keys.
-5. Whether failed messages were routed to a dead-letter queue.
-6. Whether the consumer logs show a validation or processing error.
+4. Whether the queues have the correct routing-key bindings.
+5. Whether the consumer logs contain a processing error.
+6. Whether the message was moved to a dead-letter queue.
+7. Whether the event payload matches the shared contract.
 
 ---
 
-### Inventory resets after restart
+### Stock or notifications disappear after restart
 
-This is expected in the current demo because stock is stored in memory.
+This is expected.
 
-Persistent inventory is planned as a future improvement.
+The Inventory Service and Notification Service currently use in-memory storage.
+
+Persistent storage is planned as a future improvement.
+
+---
+
+### A duplicate message is processed after restart
+
+The current duplicate-event tracking is stored in memory.
+
+It prevents duplicates while the service process remains running but does not survive a restart.
+
+Durable inbox or idempotency storage is planned.
 
 ---
 
 ## Learning outcomes
 
-CommerceFlow demonstrates practical understanding of:
+CommerceFlow demonstrates practical experience with:
 
-* Decomposing a workflow into service responsibilities
-* Designing asynchronous event flows
-* Defining shared event contracts
+* Decomposing workflows into service responsibilities
+* Designing asynchronous event chains
+* Defining typed event contracts
 * Using RabbitMQ exchanges, queues and routing keys
-* Handling connection failures
+* Preserving correlation identifiers
+* Handling failed messages through dead-letter queues
 * Planning for duplicate message delivery
 * Separating infrastructure from business behaviour
-* Evaluating consistency and reliability trade-offs
-* Identifying the gaps between a demo and a production system
+* Creating independently running services in a monorepo
+* Using GitHub Actions for repeatable validation
+* Identifying the differences between a demonstration and a production system
 
 ---
 
@@ -1144,7 +1603,9 @@ CommerceFlow demonstrates practical understanding of:
 
 CommerceFlow is under active development as a portfolio and architectural learning project.
 
-The current version demonstrates the central order-to-inventory event flow. Planned iterations will focus on automated testing, observability, durable persistence and stronger delivery guarantees.
+The current version demonstrates a complete event-driven workflow from order creation through payment, inventory, delivery and customer notification.
+
+Future iterations will focus on automated tests, durable persistence, observability and stronger delivery guarantees.
 
 ---
 
@@ -1152,4 +1613,4 @@ The current version demonstrates the central order-to-inventory event flow. Plan
 
 Created by **Kris Riisgaard Larsen**.
 
-The project is part of a software development portfolio focused on backend engineering, integrations, distributed systems and maintainable application architecture.
+CommerceFlow is part of a software development portfolio focused on backend engineering, integrations, distributed systems and maintainable application architecture.
