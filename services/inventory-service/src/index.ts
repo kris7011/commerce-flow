@@ -1,26 +1,36 @@
 import express from "express";
 import type { Request, Response } from "express";
-import { randomUUID } from "node:crypto";
 import type {
     InventoryReservationFailedEvent,
     InventoryReservedEvent,
-    OrderItem,
     PaymentAuthorizedEvent
 } from "@commerce-flow/contracts";
 import { RabbitMqClient } from "@commerce-flow/messaging";
+import { InMemoryInventoryRepository } from "./inMemoryInventoryRepository.js";
+import {
+    InventoryService,
+    type InventoryResultEvent
+} from "./inventoryService.js";
 
 const port = Number(process.env.INVENTORY_SERVICE_PORT ?? 3003);
+
 const rabbitMqUrl =
     process.env.RABBITMQ_URL ?? "amqp://guest:guest@localhost:5672";
+
+const initialStock: Readonly<Record<string, number>> = {
+    "washing-machine-01": 10,
+    "dishwasher-01": 5,
+    "dryer-01": 3
+};
 
 const app = express();
 const rabbitMq = new RabbitMqClient(rabbitMqUrl);
 
-const stockByProductId = new Map<string, number>([
-    ["washing-machine-01", 10],
-    ["dishwasher-01", 5],
-    ["dryer-01", 3]
-]);
+const inventoryRepository =
+    new InMemoryInventoryRepository(initialStock);
+
+const inventoryService =
+    new InventoryService(inventoryRepository);
 
 app.get("/health", (_request: Request, response: Response) => {
     response.json({
@@ -31,7 +41,7 @@ app.get("/health", (_request: Request, response: Response) => {
 
 app.get("/stock", (_request: Request, response: Response) => {
     response.json({
-        stock: Object.fromEntries(stockByProductId)
+        stock: inventoryRepository.getAllStock()
     });
 });
 
@@ -39,77 +49,79 @@ async function handlePaymentAuthorized(
     event: PaymentAuthorizedEvent
 ): Promise<void> {
     console.log(
-        `[inventory-service] Received PaymentAuthorized for order '${event.data.orderId}' with correlationId '${event.correlationId}'`
+        `[inventory-service] Received PaymentAuthorized ` +
+        `for order '${event.data.orderId}' ` +
+        `with correlationId '${event.correlationId}'`
     );
 
-    const unavailableItems = findUnavailableItems(event.data.items);
+    const resultEvent =
+        inventoryService.processPaymentAuthorized(event);
 
-    if (unavailableItems.length > 0) {
-        const failedEvent: InventoryReservationFailedEvent = {
-            eventId: randomUUID(),
-            eventType: "InventoryReservationFailed",
-            occurredAt: new Date().toISOString(),
-            correlationId: event.correlationId,
-            data: {
-                orderId: event.data.orderId,
-                reason: "One or more products are not available in the requested quantity.",
-                unavailableItems
-            }
-        };
+    await publishInventoryResult(resultEvent);
 
-        await rabbitMq.publish("inventory.reservation.failed", failedEvent);
+    logInventoryResult(resultEvent);
+}
 
-        console.log(
-            `[inventory-service] Inventory reservation failed for order '${event.data.orderId}'`
-        );
+async function publishInventoryResult(
+    event: InventoryResultEvent
+): Promise<void> {
+    switch (event.eventType) {
+        case "InventoryReserved":
+            await rabbitMq.publish(
+                "inventory.reserved",
+                event
+            );
+            return;
 
-        return;
+        case "InventoryReservationFailed":
+            await rabbitMq.publish(
+                "inventory.reservation.failed",
+                event
+            );
+            return;
+
+        default:
+            assertNever(event);
     }
+}
 
-    reserveStock(event.data.items);
+function logInventoryResult(event: InventoryResultEvent): void {
+    switch (event.eventType) {
+        case "InventoryReserved":
+            logInventoryReserved(event);
+            return;
 
-    const inventoryReservedEvent: InventoryReservedEvent = {
-        eventId: randomUUID(),
-        eventType: "InventoryReserved",
-        occurredAt: new Date().toISOString(),
-        correlationId: event.correlationId,
-        data: {
-            orderId: event.data.orderId,
-            reservationId: randomUUID(),
-            items: event.data.items
-        }
-    };
+        case "InventoryReservationFailed":
+            logInventoryReservationFailed(event);
+            return;
 
-    await rabbitMq.publish("inventory.reserved", inventoryReservedEvent);
+        default:
+            assertNever(event);
+    }
+}
 
+function logInventoryReserved(
+    event: InventoryReservedEvent
+): void {
     console.log(
-        `[inventory-service] Reserved inventory for order '${event.data.orderId}'`
+        `[inventory-service] Reserved inventory ` +
+        `for order '${event.data.orderId}'`
     );
 }
 
-function findUnavailableItems(items: OrderItem[]): {
-    productId: string;
-    requestedQuantity: number;
-    availableQuantity: number;
-}[] {
-    return items
-        .map(item => {
-            const availableQuantity = stockByProductId.get(item.productId) ?? 0;
-
-            return {
-                productId: item.productId,
-                requestedQuantity: item.quantity,
-                availableQuantity
-            };
-        })
-        .filter(item => item.availableQuantity < item.requestedQuantity);
+function logInventoryReservationFailed(
+    event: InventoryReservationFailedEvent
+): void {
+    console.log(
+        `[inventory-service] Inventory reservation failed ` +
+        `for order '${event.data.orderId}'`
+    );
 }
 
-function reserveStock(items: OrderItem[]): void {
-    for (const item of items) {
-        const currentQuantity = stockByProductId.get(item.productId) ?? 0;
-        stockByProductId.set(item.productId, currentQuantity - item.quantity);
-    }
+function assertNever(value: never): never {
+    throw new Error(
+        `Unsupported inventory result event: ${JSON.stringify(value)}`
+    );
 }
 
 async function start(): Promise<void> {
@@ -124,12 +136,18 @@ async function start(): Promise<void> {
     );
 
     app.listen(port, () => {
-        console.log(`[inventory-service] Listening on port ${port}`);
+        console.log(
+            `[inventory-service] Listening on port ${port}`
+        );
     });
 }
 
 start().catch(error => {
-    console.error("[inventory-service] Failed to start service", error);
+    console.error(
+        "[inventory-service] Failed to start service",
+        error
+    );
+
     process.exit(1);
 });
 
