@@ -111,20 +111,21 @@ The Notification Service currently stores notifications in memory. It does not p
 
 ## What the project demonstrates
 
-| Area                 | Demonstrated concept                           |
-| -------------------- | ---------------------------------------------- |
-| Architecture         | Event-driven services                          |
-| Communication        | Asynchronous RabbitMQ messaging                |
-| Contracts            | Shared and typed TypeScript event definitions  |
-| Routing              | Topic exchange and explicit routing keys       |
-| Reliability          | Connection retry and dead-letter handling      |
-| Consistency          | Idempotent event processing                    |
-| Traceability         | Correlation identifiers across services        |
-| Service design       | Independent business responsibilities          |
-| API design           | Express-based HTTP endpoints                   |
-| Development          | TypeScript monorepo using npm workspaces       |
-| Local infrastructure | RabbitMQ through Docker Compose                |
-| Automation           | GitHub Actions validation on Node.js 20 and 22 |
+| Area                 | Demonstrated concept                                |
+| -------------------- | --------------------------------------------------- |
+| Architecture         | Event-driven services                               |
+| Communication        | Asynchronous RabbitMQ messaging                     |
+| Contracts            | Shared and typed TypeScript event definitions       |
+| Routing              | Topic exchange and explicit routing keys            |
+| Reliability          | Connection retry and dead-letter handling           |
+| Consistency          | Idempotent event processing                         |
+| Traceability         | Correlation identifiers across services             |
+| Service design       | Independent business responsibilities               |
+| API design           | Express-based HTTP endpoints                        |
+| Development          | TypeScript monorepo using npm workspaces            |
+| Local infrastructure | RabbitMQ through Docker Compose                     |
+| Automation           | GitHub Actions validation on Node.js 20 and 22      |
+| Testing              | Unit-tested business logic across all five services |
 
 ---
 
@@ -1048,11 +1049,20 @@ npm test
 
 The root command executes test scripts in workspaces where they exist.
 
-Inventory Service currently includes unit tests covering successful
-reservations, failed reservations, duplicate order lines and unknown products.
-Additional unit, integration and end-to-end tests remain on the roadmap.
+All five services include unit tests for their isolated business behaviour.
 
-Tests are included in the roadmap.
+| Service              |  Tests | Covered behaviour                                                                       |
+| -------------------- | -----: | --------------------------------------------------------------------------------------- |
+| Order Service        |      7 | Request validation, correlation identifiers, total calculation and event creation       |
+| Payment Service      |      3 | Payment authorization event creation, data preservation and input immutability          |
+| Inventory Service    |      4 | Successful reservations, insufficient stock, duplicate order lines and unknown products |
+| Delivery Service     |      4 | Delivery event creation, date calculation, workflow identifiers and input immutability  |
+| Notification Service |      5 | Success notifications, failure notifications, storage order and defensive copies        |
+| **Total**            | **23** |                                                                                         |
+
+These are unit tests and do not require RabbitMQ or running HTTP servers.
+
+RabbitMQ integration tests and complete end-to-end workflow tests remain on the roadmap.
 
 ---
 
@@ -1264,7 +1274,8 @@ The current implementation does not yet include:
 * Distributed tracing
 * Centralized metrics
 * Centralized log aggregation
-* Automated behavioural tests
+* RabbitMQ integration tests
+* End-to-end workflow tests
 * Retry queues with delayed retries
 * Production secret management
 * Kubernetes deployment
@@ -1368,8 +1379,7 @@ A deployed environment should include:
 
 ### Next improvements
 
-* [x] Add Inventory Service unit tests
-* [ ] Add unit tests for the remaining services
+* [x] Add unit tests for all service business logic
 * [ ] Add RabbitMQ integration tests
 * [ ] Add end-to-end workflow tests
 * [ ] Separate HTTP setup from service startup
@@ -1608,7 +1618,7 @@ CommerceFlow is under active development as a portfolio and architectural learni
 
 The current version demonstrates a complete event-driven workflow from order creation through payment, inventory, delivery and customer notification.
 
-Future iterations will focus on automated tests, durable persistence, observability and stronger delivery guarantees.
+Future iterations will focus on messaging integration tests, end-to-end workflow tests, durable persistence, observability and stronger delivery guarantees.
 
 ---
 
