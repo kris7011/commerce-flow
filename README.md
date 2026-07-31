@@ -1048,7 +1048,9 @@ npm test
 
 The root command executes test scripts in workspaces where they exist.
 
-Automated behavioural tests have not yet been implemented, so the current command may complete without executing test cases.
+Inventory Service currently includes unit tests covering successful
+reservations, failed reservations, duplicate order lines and unknown products.
+Additional unit, integration and end-to-end tests remain on the roadmap.
 
 Tests are included in the roadmap.
 
@@ -1366,7 +1368,8 @@ A deployed environment should include:
 
 ### Next improvements
 
-* [ ] Add unit tests for service business logic
+* [x] Add Inventory Service unit tests
+* [ ] Add unit tests for the remaining services
 * [ ] Add RabbitMQ integration tests
 * [ ] Add end-to-end workflow tests
 * [ ] Separate HTTP setup from service startup
