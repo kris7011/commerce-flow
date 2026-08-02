@@ -125,7 +125,7 @@ The Notification Service currently stores notifications in memory. It does not p
 | Development          | TypeScript monorepo using npm workspaces               |
 | Local infrastructure | RabbitMQ through Docker Compose                        |
 | Automation           | GitHub Actions validation on Node.js 20 and 22         |
-| Testing              | Unit-tested service logic and messaging infrastructure |
+| Testing              | Unit tests and real-broker RabbitMQ integration testing |
 
 ---
 
@@ -608,6 +608,8 @@ commerce-flow/
 │       │   ├── rabbitMqClient.ts
 │       │   └── index.ts
 │       ├── tests/
+│       │   ├── integration/
+│       │   │   └── rabbitMqClient.integration.test.ts
 │       │   ├── rabbitMqClient.test.ts
 │       │   └── tsconfig.json
 │       ├── package.json
@@ -688,6 +690,8 @@ Business behaviour remains inside the individual services.
 * Fake RabbitMQ connections and channels
 * Service-level unit tests
 * Messaging infrastructure unit tests
+* Real-broker RabbitMQ integration testing
+* Isolated integration-test topology with cleanup
 * Input immutability tests
 * Defensive copy tests
 
@@ -1088,7 +1092,31 @@ These are unit tests and do not require RabbitMQ or running HTTP servers.
 
 The messaging tests use fake connection and channel implementations to verify the behaviour of `RabbitMqClient`.
 
-RabbitMQ integration tests and complete end-to-end workflow tests remain on the roadmap.
+### RabbitMQ integration test
+
+```powershell
+npm run test:integration
+```
+
+The integration test runs two independent `RabbitMqClient` instances against a real RabbitMQ broker:
+
+* One subscriber
+* One publisher
+
+It verifies:
+
+* Exchange, queue and dead-letter topology creation
+* Topic routing through RabbitMQ
+* Complete event payload preservation
+* `messageId` mapped from `eventId`
+* Correlation identifier preservation
+* JSON content type
+* Persistent message delivery mode
+* Cleanup of test-specific queues and exchanges
+
+The integration test requires RabbitMQ to be running locally or available through the `RABBITMQ_URL` environment variable.
+
+Complete end-to-end workflow tests remain on the roadmap.
 
 ---
 
@@ -1126,6 +1154,10 @@ Node.js 22.x
 Each matrix job performs:
 
 ```text
+Start RabbitMQ service container
+    ↓
+Wait for RabbitMQ health check
+    ↓
 npm ci
     ↓
 npm run typecheck
@@ -1133,12 +1165,16 @@ npm run typecheck
 npm run build
     ↓
 npm test
+    ↓
+npm run test:integration
 ```
 
 The jobs use:
 
 * Read-only repository permissions
 * npm dependency caching
+* A RabbitMQ service container
+* A RabbitMQ broker health check
 * A ten-minute timeout
 * Cancellation of outdated workflow runs on the same reference
 * Independent reporting for both Node.js versions
@@ -1453,13 +1489,14 @@ A deployed environment should include:
 * [x] Workspace builds
 * [x] Unit tests for all service business logic
 * [x] Unit tests for the shared RabbitMQ client
+* [x] RabbitMQ integration test against a real broker
+* [x] RabbitMQ integration testing in GitHub Actions
 * [x] GitHub Actions validation
 * [x] Node.js 20 and 22 CI matrix
 * [x] Dependency vulnerability remediation
 
 ### Next improvements
 
-* [ ] Add RabbitMQ integration tests
 * [ ] Add end-to-end workflow tests
 * [ ] Separate HTTP setup from service startup
 * [ ] Add request validation library
@@ -1580,13 +1617,21 @@ npm run typecheck
 npm run build
 ```
 
-### Run all tests
+### Run all unit tests
 
 ```powershell
 npm test
 ```
 
-### Run Messaging tests
+### Run RabbitMQ integration test
+
+RabbitMQ must be running locally before this command is executed.
+
+```powershell
+npm run test:integration
+```
+
+### Run Messaging unit tests
 
 ```powershell
 npm test --workspace=@commerce-flow/messaging
@@ -1739,7 +1784,9 @@ The current version demonstrates a complete event-driven workflow from order cre
 
 All service business logic and the shared messaging client are covered by 32 unit tests.
 
-Future iterations will focus on RabbitMQ integration tests, end-to-end workflow tests, durable persistence, observability and stronger delivery guarantees.
+A RabbitMQ integration test verifies publishing, routing, consumption and message metadata against a real broker. The same integration test runs in GitHub Actions on Node.js 20 and 22.
+
+Future iterations will focus on complete end-to-end workflow tests, durable persistence, observability and stronger delivery guarantees.
 
 ---
 
