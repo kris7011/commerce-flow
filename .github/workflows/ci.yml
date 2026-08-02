@@ -31,8 +31,20 @@ jobs:
                     - 20.x
                     - 22.x
 
+        services:
+            rabbitmq:
+                image: rabbitmq:3-management
+                ports:
+                    - 5672:5672
+                options: >-
+                    --health-cmd "rabbitmq-diagnostics -q ping"
+                    --health-interval 10s
+                    --health-timeout 5s
+                    --health-retries 10
+
         env:
             CI: true
+            RABBITMQ_URL: amqp://guest:guest@localhost:5672
 
         steps:
             - name: Checkout repository
@@ -54,5 +66,8 @@ jobs:
             - name: Build workspaces
               run: npm run build
 
-            - name: Run workspace tests
+            - name: Run workspace unit tests
               run: npm test
+
+            - name: Run RabbitMQ integration tests
+              run: npm run test:integration
