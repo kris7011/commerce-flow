@@ -111,21 +111,21 @@ The Notification Service currently stores notifications in memory. It does not p
 
 ## What the project demonstrates
 
-| Area                 | Demonstrated concept                                |
-| -------------------- | --------------------------------------------------- |
-| Architecture         | Event-driven services                               |
-| Communication        | Asynchronous RabbitMQ messaging                     |
-| Contracts            | Shared and typed TypeScript event definitions       |
-| Routing              | Topic exchange and explicit routing keys            |
-| Reliability          | Connection retry and dead-letter handling           |
-| Consistency          | Idempotent event processing                         |
-| Traceability         | Correlation identifiers across services             |
-| Service design       | Independent business responsibilities               |
-| API design           | Express-based HTTP endpoints                        |
-| Development          | TypeScript monorepo using npm workspaces            |
-| Local infrastructure | RabbitMQ through Docker Compose                     |
-| Automation           | GitHub Actions validation on Node.js 20 and 22      |
-| Testing              | Unit-tested business logic across all five services |
+| Area                 | Demonstrated concept                                   |
+| -------------------- | ------------------------------------------------------ |
+| Architecture         | Event-driven services                                  |
+| Communication        | Asynchronous RabbitMQ messaging                        |
+| Contracts            | Shared and typed TypeScript event definitions          |
+| Routing              | Topic exchange and explicit routing keys               |
+| Reliability          | Connection retry and dead-letter handling              |
+| Consistency          | Idempotent event processing                            |
+| Traceability         | Correlation identifiers across services                |
+| Service design       | Independent business responsibilities                  |
+| API design           | Express-based HTTP endpoints                           |
+| Development          | TypeScript monorepo using npm workspaces               |
+| Local infrastructure | RabbitMQ through Docker Compose                        |
+| Automation           | GitHub Actions validation on Node.js 20 and 22         |
+| Testing              | Unit-tested service logic and messaging infrastructure |
 
 ---
 
@@ -607,15 +607,28 @@ commerce-flow/
 │       ├── src/
 │       │   ├── rabbitMqClient.ts
 │       │   └── index.ts
+│       ├── tests/
+│       │   ├── rabbitMqClient.test.ts
+│       │   └── tsconfig.json
 │       ├── package.json
 │       └── tsconfig.json
 │
 ├── services/
 │   ├── order-service/
+│   │   ├── src/
+│   │   └── tests/
 │   ├── payment-service/
+│   │   ├── src/
+│   │   └── tests/
 │   ├── inventory-service/
+│   │   ├── src/
+│   │   └── tests/
 │   ├── delivery-service/
+│   │   ├── src/
+│   │   └── tests/
 │   └── notification-service/
+│       ├── src/
+│       └── tests/
 │
 ├── docker-compose.yml
 ├── package.json
@@ -668,6 +681,16 @@ Business behaviour remains inside the individual services.
 * Correlation identifiers
 * Idempotent consumers
 
+### Testing
+
+* Built-in Node.js test runner
+* Deterministic dependency injection
+* Fake RabbitMQ connections and channels
+* Service-level unit tests
+* Messaging infrastructure unit tests
+* Input immutability tests
+* Defensive copy tests
+
 ### Local infrastructure
 
 * Docker
@@ -682,7 +705,7 @@ Business behaviour remains inside the individual services.
 * Reproducible installation through `npm ci`
 * Type checking
 * Workspace builds
-* Automatic execution of workspace test scripts when present
+* Workspace test execution
 
 ---
 
@@ -766,31 +789,31 @@ These credentials are only suitable for local development.
 
 Open five terminals in the repository root.
 
-#### Terminal 1 — Order Service
+#### Terminal 1 - Order Service
 
 ```powershell
 npm run dev:order
 ```
 
-#### Terminal 2 — Payment Service
+#### Terminal 2 - Payment Service
 
 ```powershell
 npm run dev:payment
 ```
 
-#### Terminal 3 — Inventory Service
+#### Terminal 3 - Inventory Service
 
 ```powershell
 npm run dev:inventory
 ```
 
-#### Terminal 4 — Delivery Service
+#### Terminal 4 - Delivery Service
 
 ```powershell
 npm run dev:delivery
 ```
 
-#### Terminal 5 — Notification Service
+#### Terminal 5 - Notification Service
 
 ```powershell
 npm run dev:notification
@@ -1049,18 +1072,21 @@ npm test
 
 The root command executes test scripts in workspaces where they exist.
 
-All five services include unit tests for their isolated business behaviour.
+All five services and the shared messaging client include unit tests for their isolated behaviour.
 
-| Service              |  Tests | Covered behaviour                                                                       |
-| -------------------- | -----: | --------------------------------------------------------------------------------------- |
-| Order Service        |      7 | Request validation, correlation identifiers, total calculation and event creation       |
-| Payment Service      |      3 | Payment authorization event creation, data preservation and input immutability          |
-| Inventory Service    |      4 | Successful reservations, insufficient stock, duplicate order lines and unknown products |
-| Delivery Service     |      4 | Delivery event creation, date calculation, workflow identifiers and input immutability  |
-| Notification Service |      5 | Success notifications, failure notifications, storage order and defensive copies        |
-| **Total**            | **23** |                                                                                         |
+| Workspace            |  Tests | Covered behaviour                                                                                                        |
+| -------------------- | -----: | ------------------------------------------------------------------------------------------------------------------------ |
+| Messaging            |      9 | Connection retry, publishing, queue topology, dead-letter routing, acknowledgements, duplicate handling and reconnecting |
+| Order Service        |      7 | Request validation, correlation identifiers, total calculation and event creation                                        |
+| Payment Service      |      3 | Payment authorization event creation, data preservation and input immutability                                           |
+| Inventory Service    |      4 | Successful reservations, insufficient stock, duplicate order lines and unknown products                                  |
+| Delivery Service     |      4 | Delivery event creation, date calculation, workflow identifiers and input immutability                                   |
+| Notification Service |      5 | Success notifications, failure notifications, storage order and defensive copies                                         |
+| **Total**            | **32** |                                                                                                                          |
 
 These are unit tests and do not require RabbitMQ or running HTTP servers.
+
+The messaging tests use fake connection and channel implementations to verify the behaviour of `RabbitMqClient`.
 
 RabbitMQ integration tests and complete end-to-end workflow tests remain on the roadmap.
 
@@ -1215,6 +1241,58 @@ The messaging workspace centralizes:
 * Connection shutdown
 
 This avoids duplicating the same infrastructure code in every service.
+
+The messaging client accepts replaceable infrastructure dependencies so its behaviour can be tested without starting a real RabbitMQ broker.
+
+The normal application code still creates the client with:
+
+```ts
+const rabbitMq = new RabbitMqClient(rabbitMqUrl);
+```
+
+Unit tests can instead inject:
+
+* A fake RabbitMQ connection
+* A fake RabbitMQ channel
+* A deterministic delay function
+* A silent test logger
+
+This keeps production behaviour unchanged while allowing retry, routing, acknowledgement and failure handling to be tested deterministically.
+
+---
+
+### Why dependency injection in the messaging client?
+
+The real RabbitMQ connection is an external dependency.
+
+If the client called `amqplib.connect` directly with no replacement option, every test would require:
+
+* Docker
+* A running RabbitMQ broker
+* Available network ports
+* Correct credentials
+* Queue cleanup between tests
+
+Dependency injection allows unit tests to replace external infrastructure while testing the client’s own decisions.
+
+The messaging unit tests verify:
+
+* Connection reuse
+* Connection retries
+* Retry exhaustion
+* Exchange declarations
+* Event serialization
+* Persistent message metadata
+* Queue bindings
+* Dead-letter routing
+* Successful acknowledgements
+* Negative acknowledgements
+* Duplicate event handling
+* Resource shutdown and reconnection
+
+These tests do not replace RabbitMQ integration tests.
+
+They test the application’s messaging logic independently of RabbitMQ itself.
 
 ---
 
@@ -1373,13 +1451,14 @@ A deployed environment should include:
 * [x] Docker Compose environment
 * [x] Type checking
 * [x] Workspace builds
+* [x] Unit tests for all service business logic
+* [x] Unit tests for the shared RabbitMQ client
 * [x] GitHub Actions validation
 * [x] Node.js 20 and 22 CI matrix
 * [x] Dependency vulnerability remediation
 
 ### Next improvements
 
-* [x] Add unit tests for all service business logic
 * [ ] Add RabbitMQ integration tests
 * [ ] Add end-to-end workflow tests
 * [ ] Separate HTTP setup from service startup
@@ -1501,10 +1580,46 @@ npm run typecheck
 npm run build
 ```
 
-### Run workspace tests
+### Run all tests
 
 ```powershell
 npm test
+```
+
+### Run Messaging tests
+
+```powershell
+npm test --workspace=@commerce-flow/messaging
+```
+
+### Run Order Service tests
+
+```powershell
+npm test --workspace=@commerce-flow/order-service
+```
+
+### Run Payment Service tests
+
+```powershell
+npm test --workspace=@commerce-flow/payment-service
+```
+
+### Run Inventory Service tests
+
+```powershell
+npm test --workspace=@commerce-flow/inventory-service
+```
+
+### Run Delivery Service tests
+
+```powershell
+npm test --workspace=@commerce-flow/delivery-service
+```
+
+### Run Notification Service tests
+
+```powershell
+npm test --workspace=@commerce-flow/notification-service
 ```
 
 ### Audit dependencies
@@ -1606,8 +1721,12 @@ CommerceFlow demonstrates practical experience with:
 * Handling failed messages through dead-letter queues
 * Planning for duplicate message delivery
 * Separating infrastructure from business behaviour
+* Applying dependency injection to infrastructure code
+* Testing retry and failure behaviour deterministically
+* Testing message acknowledgements and dead-letter decisions
 * Creating independently running services in a monorepo
 * Using GitHub Actions for repeatable validation
+* Identifying the differences between unit, integration and end-to-end tests
 * Identifying the differences between a demonstration and a production system
 
 ---
@@ -1618,7 +1737,9 @@ CommerceFlow is under active development as a portfolio and architectural learni
 
 The current version demonstrates a complete event-driven workflow from order creation through payment, inventory, delivery and customer notification.
 
-Future iterations will focus on messaging integration tests, end-to-end workflow tests, durable persistence, observability and stronger delivery guarantees.
+All service business logic and the shared messaging client are covered by 32 unit tests.
+
+Future iterations will focus on RabbitMQ integration tests, end-to-end workflow tests, durable persistence, observability and stronger delivery guarantees.
 
 ---
 
