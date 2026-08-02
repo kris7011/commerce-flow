@@ -60,7 +60,7 @@ jobs:
             - name: Install dependencies
               run: npm ci
 
-            - name: Type-check workspaces
+            - name: Type-check project
               run: npm run typecheck
 
             - name: Build workspaces
@@ -71,3 +71,6 @@ jobs:
 
             - name: Run RabbitMQ integration tests
               run: npm run test:integration
+
+            - name: Run complete end-to-end workflow test
+              run: npm run test:e2e
