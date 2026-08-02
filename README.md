@@ -1124,7 +1124,53 @@ It verifies:
 
 The integration test requires RabbitMQ to be running locally or available through the `RABBITMQ_URL` environment variable.
 
-Complete end-to-end workflow tests remain on the roadmap.
+### Complete end-to-end workflow test
+
+```powershell
+npm run test:e2e
+```
+
+The end-to-end test starts all five services as independent Node.js processes and uses a real RabbitMQ broker.
+
+The test interacts with the system only through its public HTTP endpoints:
+
+* `POST /orders` starts the workflow.
+* `GET /notifications` verifies the final customer-facing result.
+* `GET /stock` verifies successful and failed inventory effects.
+
+The test covers both complete workflow outcomes:
+
+```text
+Successful order
+    ↓
+OrderCreated
+    ↓
+PaymentAuthorized
+    ↓
+InventoryReserved
+    ↓
+DeliveryBooked
+    ↓
+DeliveryBooked notification
+```
+
+```text
+Insufficient inventory
+    ↓
+OrderCreated
+    ↓
+PaymentAuthorized
+    ↓
+InventoryReservationFailed
+    ↓
+InventoryReservationFailed notification
+```
+
+It also verifies that successful reservations reduce stock and failed reservations leave stock unchanged.
+
+The services use test-specific ports `3101` through `3105` and are stopped after the test completes.
+
+RabbitMQ must be running locally or available through the `RABBITMQ_URL` environment variable.
 
 ---
 
@@ -1175,6 +1221,8 @@ npm run build
 npm test
     ↓
 npm run test:integration
+    ↓
+npm run test:e2e
 ```
 
 The jobs use:
@@ -1186,6 +1234,7 @@ The jobs use:
 * A ten-minute timeout
 * Cancellation of outdated workflow runs on the same reference
 * Independent reporting for both Node.js versions
+* Complete workflow validation through five independently running services
 
 ---
 
@@ -1499,13 +1548,15 @@ A deployed environment should include:
 * [x] Unit tests for the shared RabbitMQ client
 * [x] RabbitMQ integration test against a real broker
 * [x] RabbitMQ integration testing in GitHub Actions
+* [x] Complete successful workflow end-to-end test
+* [x] Complete failed inventory workflow end-to-end test
+* [x] End-to-end testing in GitHub Actions
 * [x] GitHub Actions validation
 * [x] Node.js 20 and 22 CI matrix
 * [x] Dependency vulnerability remediation
 
 ### Next improvements
 
-* [ ] Add end-to-end workflow tests
 * [ ] Separate HTTP setup from service startup
 * [ ] Add request validation library
 * [ ] Add structured logging
@@ -1637,6 +1688,14 @@ RabbitMQ must be running locally before this command is executed.
 
 ```powershell
 npm run test:integration
+```
+
+### Run complete end-to-end workflow test
+
+RabbitMQ must be running locally. The test starts and stops all five services automatically.
+
+```powershell
+npm run test:e2e
 ```
 
 ### Run Messaging unit tests
@@ -1792,9 +1851,13 @@ The current version demonstrates a complete event-driven workflow from order cre
 
 All service business logic and the shared messaging client are covered by 32 unit tests.
 
-A RabbitMQ integration test verifies publishing, routing, consumption and message metadata against a real broker. The same integration test runs in GitHub Actions on Node.js 20 and 22.
+A RabbitMQ integration test verifies publishing, routing, consumption and message metadata against a real broker.
 
-Future iterations will focus on complete end-to-end workflow tests, durable persistence, observability and stronger delivery guarantees.
+A complete end-to-end test starts all five services and verifies both the successful delivery workflow and the failed inventory workflow through public HTTP endpoints and RabbitMQ.
+
+Unit, integration and end-to-end tests run automatically in GitHub Actions on Node.js 20 and 22.
+
+Future iterations will focus on durable persistence, observability, stronger delivery guarantees and clearer separation between HTTP application setup and process startup.
 
 ---
 
