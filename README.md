@@ -125,7 +125,7 @@ The Notification Service currently stores notifications in memory. It does not p
 | Development          | TypeScript monorepo using npm workspaces               |
 | Local infrastructure | RabbitMQ through Docker Compose                        |
 | Automation           | GitHub Actions validation on Node.js 20 and 22         |
-| Testing              | Unit tests and real-broker RabbitMQ integration testing |
+| Testing              | Unit, RabbitMQ integration and complete end-to-end testing |
 
 ---
 
@@ -632,6 +632,11 @@ commerce-flow/
 │       ├── src/
 │       └── tests/
 │
+├── tests/
+│   ├── e2e/
+│   │   └── commerceFlow.e2e.test.ts
+│   └── tsconfig.json
+│
 ├── docker-compose.yml
 ├── package.json
 ├── package-lock.json
@@ -692,6 +697,9 @@ Business behaviour remains inside the individual services.
 * Messaging infrastructure unit tests
 * Real-broker RabbitMQ integration testing
 * Isolated integration-test topology with cleanup
+* Complete workflow end-to-end testing
+* Five independently running service processes during end-to-end testing
+* HTTP assertions against public service endpoints
 * Input immutability tests
 * Defensive copy tests
 
