@@ -14,7 +14,8 @@
     "scripts": {
         "build": "tsc -p tsconfig.json",
         "typecheck": "tsc -p tests/tsconfig.json --noEmit",
-        "test": "node --import tsx --test tests/rabbitMqClient.test.ts"
+        "test": "node --import tsx --test tests/rabbitMqClient.test.ts",
+        "test:integration": "node --import tsx --test tests/integration/rabbitMqClient.integration.test.ts"
     },
     "dependencies": {
         "amqplib": "^0.10.5"
