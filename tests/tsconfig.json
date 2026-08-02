@@ -1,0 +1,13 @@
+{
+    "extends": "../tsconfig.base.json",
+    "compilerOptions": {
+        "rootDir": ".",
+        "noEmit": true,
+        "types": [
+            "node"
+        ]
+    },
+    "include": [
+        "e2e/**/*.ts"
+    ]
+}

@@ -1,4 +1,4 @@
-﻿{
+{
   "name": "commerce-flow",
   "version": "0.1.0",
   "private": true,
@@ -18,9 +18,12 @@
   ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",
-    "typecheck": "npm run typecheck --workspaces --if-present",
+    "typecheck": "npm run typecheck:workspaces && npm run typecheck:e2e",
+    "typecheck:workspaces": "npm run typecheck --workspaces --if-present",
+    "typecheck:e2e": "tsc -p tests/tsconfig.json --noEmit",
     "test": "npm run test --workspaces --if-present",
     "test:integration": "npm run test:integration --workspace=@commerce-flow/messaging",
+    "test:e2e": "node --import tsx --test tests/e2e/commerceFlow.e2e.test.ts",
     "dev:order": "npm run dev --workspace=@commerce-flow/order-service",
     "dev:payment": "npm run dev --workspace=@commerce-flow/payment-service",
     "dev:inventory": "npm run dev --workspace=@commerce-flow/inventory-service",
