@@ -8,7 +8,7 @@
         "dev": "tsx src/index.ts",
         "build": "tsc -p tsconfig.json",
         "typecheck": "tsc -p tests/tsconfig.json --noEmit",
-        "test": "node --import tsx --test tests/paymentService.test.ts"
+        "test": "node --import tsx --test tests/paymentService.test.ts tests/paymentApp.test.ts tests/orderCreatedHandler.test.ts"
     },
     "dependencies": {
         "@commerce-flow/contracts": "file:../../shared/contracts",
