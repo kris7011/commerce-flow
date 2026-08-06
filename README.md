@@ -1517,8 +1517,6 @@ The current implementation does not yet include:
 * Distributed tracing
 * Centralized metrics
 * Centralized log aggregation
-* RabbitMQ integration tests
-* End-to-end workflow tests
 * Retry queues with delayed retries
 * Production secret management
 * Kubernetes deployment
@@ -1632,7 +1630,6 @@ A deployed environment should include:
 
 ### Next improvements
 
-* [ ] Separate HTTP setup from service startup
 * [ ] Add request validation library
 * [ ] Add structured logging
 * [ ] Add dependency-aware readiness endpoints
