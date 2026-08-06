@@ -618,19 +618,59 @@ commerce-flow/
 ├── services/
 │   ├── order-service/
 │   │   ├── src/
+│   │   │   ├── app.ts
+│   │   │   ├── index.ts
+│   │   │   ├── orderRequestValidator.ts
+│   │   │   └── orderService.ts
 │   │   └── tests/
+│   │       ├── orderApp.test.ts
+│   │       └── orderService.test.ts
+│   │
 │   ├── payment-service/
 │   │   ├── src/
+│   │   │   ├── app.ts
+│   │   │   ├── index.ts
+│   │   │   ├── orderCreatedHandler.ts
+│   │   │   └── paymentService.ts
 │   │   └── tests/
+│   │       ├── orderCreatedHandler.test.ts
+│   │       ├── paymentApp.test.ts
+│   │       └── paymentService.test.ts
+│   │
 │   ├── inventory-service/
 │   │   ├── src/
+│   │   │   ├── app.ts
+│   │   │   ├── index.ts
+│   │   │   ├── inMemoryInventoryRepository.ts
+│   │   │   ├── inventoryRepository.ts
+│   │   │   ├── inventoryService.ts
+│   │   │   └── paymentAuthorizedHandler.ts
 │   │   └── tests/
+│   │       ├── inventoryApp.test.ts
+│   │       ├── inventoryService.test.ts
+│   │       └── paymentAuthorizedHandler.test.ts
+│   │
 │   ├── delivery-service/
 │   │   ├── src/
+│   │   │   ├── app.ts
+│   │   │   ├── deliveryService.ts
+│   │   │   ├── index.ts
+│   │   │   └── inventoryReservedHandler.ts
 │   │   └── tests/
+│   │       ├── deliveryApp.test.ts
+│   │       ├── deliveryService.test.ts
+│   │       └── inventoryReservedHandler.test.ts
+│   │
 │   └── notification-service/
 │       ├── src/
+│       │   ├── app.ts
+│       │   ├── index.ts
+│       │   ├── notificationEventHandler.ts
+│       │   └── notificationService.ts
 │       └── tests/
+│           ├── notificationApp.test.ts
+│           ├── notificationEventHandler.test.ts
+│           └── notificationService.test.ts
 │
 ├── tests/
 │   ├── e2e/
@@ -693,13 +733,16 @@ Business behaviour remains inside the individual services.
 * Built-in Node.js test runner
 * Deterministic dependency injection
 * Fake RabbitMQ connections and channels
-* Service-level unit tests
+* Service business-logic unit tests
+* HTTP application component tests on dynamic local ports
+* Event-handler component tests with injected publishers and loggers
 * Messaging infrastructure unit tests
 * Real-broker RabbitMQ integration testing
 * Isolated integration-test topology with cleanup
 * Complete workflow end-to-end testing
 * Five independently running service processes during end-to-end testing
 * HTTP assertions against public service endpoints
+* Publisher failure-propagation tests
 * Input immutability tests
 * Defensive copy tests
 
@@ -1084,19 +1127,23 @@ npm test
 
 The root command executes test scripts in workspaces where they exist.
 
-All five services and the shared messaging client include unit tests for their isolated behaviour.
+All five services and the shared messaging client include unit and component tests for their isolated behaviour.
 
-| Workspace            |  Tests | Covered behaviour                                                                                                        |
-| -------------------- | -----: | ------------------------------------------------------------------------------------------------------------------------ |
-| Messaging            |      9 | Connection retry, publishing, queue topology, dead-letter routing, acknowledgements, duplicate handling and reconnecting |
-| Order Service        |      7 | Request validation, correlation identifiers, total calculation and event creation                                        |
-| Payment Service      |      3 | Payment authorization event creation, data preservation and input immutability                                           |
-| Inventory Service    |      4 | Successful reservations, insufficient stock, duplicate order lines and unknown products                                  |
-| Delivery Service     |      4 | Delivery event creation, date calculation, workflow identifiers and input immutability                                   |
-| Notification Service |      5 | Success notifications, failure notifications, storage order and defensive copies                                         |
-| **Total**            | **32** |                                                                                                                          |
+| Workspace            |  Tests | Covered behaviour                                                                                                                               |
+| -------------------- | -----: | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| Messaging            |      9 | Connection retry, publishing, queue topology, dead-letter routing, acknowledgements, duplicate handling and reconnecting                        |
+| Order Service        |     10 | Request validation, correlation identifiers, totals, event creation, HTTP endpoints and publishing through an injected publisher                |
+| Payment Service      |      6 | Payment event creation, data preservation, health endpoint, event coordination and publisher failure propagation                                |
+| Inventory Service    |      9 | Reservation rules, health and stock endpoints, successful and failed event coordination, logging and publisher failure propagation              |
+| Delivery Service     |      7 | Delivery creation, date calculation, health endpoint, event coordination, workflow identifiers and publisher failure propagation                |
+| Notification Service |      9 | Notification creation, defensive copies, health and notification endpoints, both event-handler paths and logging                               |
+| **Total**            | **50** |                                                                                                                                                 |
 
-These are unit tests and do not require RabbitMQ or running HTTP servers.
+These tests do not require RabbitMQ or separately running service processes.
+
+The HTTP application tests create temporary in-process Express servers on dynamic ports and close them after each test.
+
+The event-handler tests inject recording publishers and loggers to verify coordination, produced results and failure propagation without RabbitMQ.
 
 The messaging tests use fake connection and channel implementations to verify the behaviour of `RabbitMqClient`.
 
@@ -1389,6 +1436,31 @@ They test the application’s messaging logic independently of RabbitMQ itself.
 
 ---
 
+### Why separate HTTP setup from process startup?
+
+Each service keeps application construction separate from process startup.
+
+The structure follows three responsibilities:
+
+* `app.ts` creates the Express application and registers its HTTP routes without listening on a fixed port.
+* Event-consuming services use dedicated handler modules to coordinate domain logic, event publication and logging.
+* `index.ts` acts as the composition root and owns environment variables, concrete RabbitMQ adapters, subscriptions, port binding and process signals.
+
+The Order Service receives its work through HTTP rather than a RabbitMQ subscription. Its `app.ts` therefore receives an injected `OrderCreatedPublisher` instead of using a message-consumer handler.
+
+This separation provides several benefits:
+
+* HTTP behaviour can be tested without starting the complete service process.
+* Tests can bind Express to an available dynamic port.
+* Event handlers can use fake publishers and recording loggers.
+* RabbitMQ routing keys remain infrastructure details in the composition root.
+* Importing application code does not automatically connect to RabbitMQ or terminate the process.
+* Business and coordination behaviour can be validated independently of process lifecycle concerns.
+
+The result is a clearer boundary between application behaviour and runtime infrastructure.
+
+---
+
 ### Why a monorepo?
 
 The monorepo keeps the demonstration easy to install, run and inspect.
@@ -1545,6 +1617,9 @@ A deployed environment should include:
 * [x] Type checking
 * [x] Workspace builds
 * [x] Unit tests for all service business logic
+* [x] HTTP application tests for all services
+* [x] Event-handler component tests for all consuming services
+* [x] HTTP setup separated from process startup
 * [x] Unit tests for the shared RabbitMQ client
 * [x] RabbitMQ integration test against a real broker
 * [x] RabbitMQ integration testing in GitHub Actions
@@ -1833,6 +1908,9 @@ CommerceFlow demonstrates practical experience with:
 * Handling failed messages through dead-letter queues
 * Planning for duplicate message delivery
 * Separating infrastructure from business behaviour
+* Separating HTTP application setup, event handling and process startup
+* Testing Express applications on dynamic local ports
+* Testing event handlers with injected publishers and loggers
 * Applying dependency injection to infrastructure code
 * Testing retry and failure behaviour deterministically
 * Testing message acknowledgements and dead-letter decisions
@@ -1849,7 +1927,7 @@ CommerceFlow is under active development as a portfolio and architectural learni
 
 The current version demonstrates a complete event-driven workflow from order creation through payment, inventory, delivery and customer notification.
 
-All service business logic and the shared messaging client are covered by 32 unit tests.
+Service business logic, HTTP applications, event handlers and the shared messaging client are covered by 50 unit and component tests.
 
 A RabbitMQ integration test verifies publishing, routing, consumption and message metadata against a real broker.
 
@@ -1857,7 +1935,9 @@ A complete end-to-end test starts all five services and verifies both the succes
 
 Unit, integration and end-to-end tests run automatically in GitHub Actions on Node.js 20 and 22.
 
-Future iterations will focus on durable persistence, observability, stronger delivery guarantees and clearer separation between HTTP application setup and process startup.
+All five services now separate HTTP application construction from process startup. Event-consuming services also isolate their message coordination in dedicated, dependency-injected handler modules.
+
+Future iterations will focus on durable persistence, observability, stronger delivery guarantees and production-oriented recovery patterns.
 
 ---
 
