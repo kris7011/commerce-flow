@@ -23,6 +23,10 @@ export interface OrderCreatedPublisher {
     ): Promise<void>;
 }
 
+export interface ReadinessProbe {
+    isReady(): boolean;
+}
+
 export interface OrderAppDependencies {
     readonly orderService:
     OrderService;
@@ -32,6 +36,9 @@ export interface OrderAppDependencies {
 
     readonly logger:
     AppLogger;
+
+    readonly readinessProbe:
+    ReadinessProbe;
 }
 
 export function createOrderApp(
@@ -41,7 +48,8 @@ export function createOrderApp(
     const {
         orderService,
         orderCreatedPublisher,
-        logger
+        logger,
+        readinessProbe
     } = dependencies;
 
     const app = express();
@@ -58,6 +66,38 @@ export function createOrderApp(
                 status: "Healthy",
                 service: "order-service"
             });
+        }
+    );
+
+    app.get(
+        "/ready",
+        (
+            _request: Request,
+            response: Response
+        ) => {
+            const rabbitMqReady =
+                readinessProbe.isReady();
+
+            const status =
+                rabbitMqReady
+                    ? "Ready"
+                    : "NotReady";
+
+            return response
+                .status(
+                    rabbitMqReady
+                        ? 200
+                        : 503
+                )
+                .json({
+                    status,
+                    service:
+                        "order-service",
+                    dependencies: {
+                        rabbitMq:
+                            status
+                    }
+                });
         }
     );
 

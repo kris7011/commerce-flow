@@ -51,7 +51,9 @@ const app =
     createOrderApp({
         orderService,
         orderCreatedPublisher,
-        logger
+        logger,
+        readinessProbe:
+            rabbitMq
     });
 
 async function start(): Promise<void> {
