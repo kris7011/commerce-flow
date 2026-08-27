@@ -10,6 +10,7 @@
   "workspaces": [
     "shared/contracts",
     "shared/messaging",
+    "shared/logging",
     "services/order-service",
     "services/payment-service",
     "services/inventory-service",
