@@ -2,6 +2,9 @@ import type {
     DeliveryBookedEvent,
     InventoryReservedEvent
 } from "@commerce-flow/contracts";
+import type {
+    AppLogger
+} from "@commerce-flow/logging";
 import {
     DeliveryService
 } from "./deliveryService.js";
@@ -12,10 +15,6 @@ export interface DeliveryBookedPublisher {
     ): Promise<void>;
 }
 
-export interface DeliveryEventLogger {
-    log(message: string): void;
-}
-
 export interface InventoryReservedHandlerDependencies {
     readonly deliveryService:
     DeliveryService;
@@ -23,8 +22,8 @@ export interface InventoryReservedHandlerDependencies {
     readonly deliveryBookedPublisher:
     DeliveryBookedPublisher;
 
-    readonly logger?:
-    DeliveryEventLogger;
+    readonly logger:
+    AppLogger;
 }
 
 export type InventoryReservedHandler = (
@@ -38,19 +37,26 @@ export function createInventoryReservedHandler(
     const {
         deliveryService,
         deliveryBookedPublisher,
-        logger = console
+        logger
     } = dependencies;
 
     return async (
         event: InventoryReservedEvent
     ): Promise<void> => {
-        logger.log(
-            `[delivery-service] ` +
-            `Received InventoryReserved ` +
-            `for order ` +
-            `'${event.data.orderId}' ` +
-            `with correlationId ` +
-            `'${event.correlationId}'`
+        logger.info(
+            "Received InventoryReserved",
+            {
+                eventId:
+                    event.eventId,
+                orderId:
+                    event.data.orderId,
+                reservationId:
+                    event.data.reservationId,
+                correlationId:
+                    event.correlationId,
+                itemCount:
+                    event.data.items.length
+            }
         );
 
         const deliveryBookedEvent =
@@ -62,11 +68,28 @@ export function createInventoryReservedHandler(
                 deliveryBookedEvent
             );
 
-        logger.log(
-            `[delivery-service] ` +
-            `Booked delivery ` +
-            `for order ` +
-            `'${event.data.orderId}'`
+        logger.info(
+            "Booked delivery",
+            {
+                eventId:
+                    deliveryBookedEvent.eventId,
+                orderId:
+                    deliveryBookedEvent
+                        .data.orderId,
+                deliveryId:
+                    deliveryBookedEvent
+                        .data.deliveryId,
+                carrier:
+                    deliveryBookedEvent
+                        .data.carrier,
+                estimatedDeliveryDate:
+                    deliveryBookedEvent
+                        .data
+                        .estimatedDeliveryDate,
+                correlationId:
+                    deliveryBookedEvent
+                        .correlationId
+            }
         );
     };
 }

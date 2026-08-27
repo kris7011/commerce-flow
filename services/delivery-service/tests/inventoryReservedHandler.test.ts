@@ -4,13 +4,16 @@ import type {
     DeliveryBookedEvent,
     InventoryReservedEvent
 } from "@commerce-flow/contracts";
+import type {
+    AppLogger,
+    LogContext
+} from "@commerce-flow/logging";
 import {
     DeliveryService
 } from "../src/deliveryService.js";
 import {
     createInventoryReservedHandler,
-    type DeliveryBookedPublisher,
-    type DeliveryEventLogger
+    type DeliveryBookedPublisher
 } from "../src/inventoryReservedHandler.js";
 
 const fixedDate =
@@ -74,17 +77,42 @@ test(
         );
 
         assert.deepEqual(
-            logger.messages,
+            logger.infoLogs,
             [
-                "[delivery-service] " +
-                "Received InventoryReserved " +
-                "for order 'order-001' " +
-                "with correlationId " +
-                "'correlation-001'",
-
-                "[delivery-service] " +
-                "Booked delivery " +
-                "for order 'order-001'"
+                {
+                    message:
+                        "Received InventoryReserved",
+                    context: {
+                        eventId:
+                            "inventory-event-001",
+                        orderId:
+                            "order-001",
+                        reservationId:
+                            "reservation-001",
+                        correlationId:
+                            "correlation-001",
+                        itemCount:
+                            1
+                    }
+                },
+                {
+                    message:
+                        "Booked delivery",
+                    context: {
+                        eventId:
+                            "delivery-event-001",
+                        orderId:
+                            "order-001",
+                        deliveryId:
+                            "delivery-001",
+                        carrier:
+                            "DefaultCarrier",
+                        estimatedDeliveryDate:
+                            "2026-08-08",
+                        correlationId:
+                            "correlation-001"
+                    }
+                }
             ]
         );
     }
@@ -128,13 +156,24 @@ test(
         );
 
         assert.deepEqual(
-            logger.messages,
+            logger.infoLogs,
             [
-                "[delivery-service] " +
-                "Received InventoryReserved " +
-                "for order 'order-001' " +
-                "with correlationId " +
-                "'correlation-001'"
+                {
+                    message:
+                        "Received InventoryReserved",
+                    context: {
+                        eventId:
+                            "inventory-event-001",
+                        orderId:
+                            "order-001",
+                        reservationId:
+                            "reservation-001",
+                        correlationId:
+                            "correlation-001",
+                        itemCount:
+                            1
+                    }
+                }
             ]
         );
     }
@@ -168,12 +207,59 @@ class FailingDeliveryBookedPublisher
 }
 
 class RecordingDeliveryLogger
-    implements DeliveryEventLogger {
-    readonly messages:
-        string[] = [];
+    implements AppLogger {
+    readonly infoLogs: {
+        message: string;
+        context?: LogContext;
+    }[] = [];
 
-    log(message: string): void {
-        this.messages.push(message);
+    readonly warningLogs: {
+        message: string;
+        context?: LogContext;
+    }[] = [];
+
+    readonly errorLogs: {
+        message: string;
+        error?: unknown;
+        context?: LogContext;
+    }[] = [];
+
+    info(
+        message: string,
+        context?: LogContext
+    ): void {
+        this.infoLogs.push({
+            message,
+            context
+        });
+    }
+
+    warn(
+        message: string,
+        context?: LogContext
+    ): void {
+        this.warningLogs.push({
+            message,
+            context
+        });
+    }
+
+    error(
+        message: string,
+        error?: unknown,
+        context?: LogContext
+    ): void {
+        this.errorLogs.push({
+            message,
+            error,
+            context
+        });
+    }
+
+    child(
+        _context: LogContext
+    ): AppLogger {
+        return this;
     }
 }
 
