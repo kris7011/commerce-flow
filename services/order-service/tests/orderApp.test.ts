@@ -12,9 +12,12 @@ import test from "node:test";
 import type {
     OrderCreatedEvent
 } from "@commerce-flow/contracts";
+import type {
+    AppLogger,
+    LogContext
+} from "@commerce-flow/logging";
 import {
     createOrderApp,
-    type OrderAppLogger,
     type OrderCreatedPublisher
 } from "../src/app.js";
 import {
@@ -25,10 +28,24 @@ const fixedTime =
     "2026-08-02T12:00:00.000Z";
 
 const silentLogger:
-    OrderAppLogger = {
-    log(): void {
+    AppLogger = {
+    info(): void {
         // Logging is intentionally disabled
         // during these HTTP tests.
+    },
+
+    warn(): void {
+        // Logging is intentionally disabled
+        // during these HTTP tests.
+    },
+
+    error(): void {
+        // Logging is intentionally disabled
+        // during these HTTP tests.
+    },
+
+    child(): AppLogger {
+        return silentLogger;
     }
 };
 
@@ -253,6 +270,193 @@ test(
     }
 );
 
+test(
+    "logs order requests with structured context",
+    async () => {
+        const publisher =
+            new RecordingOrderCreatedPublisher();
+
+        const logger =
+            new RecordingOrderAppLogger();
+
+        const app =
+            createOrderApp({
+                orderService:
+                    createOrderService([
+                        "order-001",
+                        "event-001"
+                    ]),
+                orderCreatedPublisher:
+                    publisher,
+                logger
+            });
+
+        await withTestServer(
+            app,
+            async baseUrl => {
+                const invalidResponse =
+                    await fetch(
+                        `${baseUrl}/orders`,
+                        {
+                            method: "POST",
+                            headers: {
+                                "content-type":
+                                    "application/json"
+                            },
+                            body:
+                                JSON.stringify({
+                                    customerId:
+                                        "customer-001",
+                                    items: []
+                                })
+                        }
+                    );
+
+                assert.equal(
+                    invalidResponse.status,
+                    400
+                );
+
+                assert.equal(
+                    logger.warningLogs.length,
+                    1
+                );
+
+                assert.equal(
+                    logger.warningLogs[0]
+                        ?.message,
+                    "Rejected invalid order request"
+                );
+
+                const validationIssues =
+                    logger.warningLogs[0]
+                        ?.context
+                        ?.validationIssues;
+
+                assert.ok(
+                    Array.isArray(
+                        validationIssues
+                    )
+                );
+
+                const validResponse =
+                    await fetch(
+                        `${baseUrl}/orders`,
+                        {
+                            method: "POST",
+                            headers: {
+                                "content-type":
+                                    "application/json",
+                                "x-correlation-id":
+                                    "correlation-001"
+                            },
+                            body:
+                                JSON.stringify({
+                                    customerId:
+                                        "customer-001",
+                                    items: [
+                                        {
+                                            productId:
+                                                "washing-machine-01",
+                                            quantity:
+                                                2,
+                                            unitPrice:
+                                                4999.95
+                                        }
+                                    ]
+                                })
+                        }
+                    );
+
+                assert.equal(
+                    validResponse.status,
+                    201
+                );
+
+                assert.deepEqual(
+                    logger.infoLogs,
+                    [
+                        {
+                            message:
+                                "Created order",
+                            context: {
+                                orderId:
+                                    "order-001",
+                                eventId:
+                                    "event-001",
+                                customerId:
+                                    "customer-001",
+                                correlationId:
+                                    "correlation-001",
+                                totalAmount:
+                                    9999.9,
+                                itemCount:
+                                    1
+                            }
+                        }
+                    ]
+                );
+            }
+        );
+    }
+);
+
+class RecordingOrderAppLogger
+    implements AppLogger {
+    readonly infoLogs: {
+        message: string;
+        context?: LogContext;
+    }[] = [];
+
+    readonly warningLogs: {
+        message: string;
+        context?: LogContext;
+    }[] = [];
+
+    readonly errorLogs: {
+        message: string;
+        error?: unknown;
+        context?: LogContext;
+    }[] = [];
+
+    info(
+        message: string,
+        context?: LogContext
+    ): void {
+        this.infoLogs.push({
+            message,
+            context
+        });
+    }
+
+    warn(
+        message: string,
+        context?: LogContext
+    ): void {
+        this.warningLogs.push({
+            message,
+            context
+        });
+    }
+
+    error(
+        message: string,
+        error?: unknown,
+        context?: LogContext
+    ): void {
+        this.errorLogs.push({
+            message,
+            error,
+            context
+        });
+    }
+
+    child(
+        _context: LogContext
+    ): AppLogger {
+        return this;
+    }
+}
 class RecordingOrderCreatedPublisher
     implements OrderCreatedPublisher {
     readonly events:

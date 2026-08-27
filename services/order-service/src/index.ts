@@ -1,149 +1,96 @@
-import express from "express";
-import type {
-    Express,
-    Request,
-    Response
-} from "express";
-import type {
-    OrderCreatedEvent
-} from "@commerce-flow/contracts";
-import type {
-    AppLogger
+import {
+    createStructuredLogger
 } from "@commerce-flow/logging";
 import {
-    parseCreateOrderRequest
-} from "./orderRequestValidator.js";
+    RabbitMqClient
+} from "@commerce-flow/messaging";
+import {
+    createOrderApp,
+    type OrderCreatedPublisher
+} from "./app.js";
 import {
     OrderService
 } from "./orderService.js";
 
-export interface OrderCreatedPublisher {
-    publishOrderCreated(
-        event: OrderCreatedEvent
-    ): Promise<void>;
-}
+const port =
+    Number(
+        process.env.ORDER_SERVICE_PORT ??
+        3001
+    );
 
-export interface OrderAppDependencies {
-    readonly orderService:
-    OrderService;
+const rabbitMqUrl =
+    process.env.RABBITMQ_URL ??
+    "amqp://guest:guest@localhost:5672";
 
-    readonly orderCreatedPublisher:
-    OrderCreatedPublisher;
+const logger =
+    createStructuredLogger(
+        "order-service"
+    );
 
-    readonly logger:
-    AppLogger;
-}
+const rabbitMq =
+    new RabbitMqClient(
+        rabbitMqUrl
+    );
 
-export function createOrderApp(
-    dependencies:
-        OrderAppDependencies
-): Express {
-    const {
+const orderService =
+    new OrderService();
+
+const orderCreatedPublisher:
+    OrderCreatedPublisher = {
+    async publishOrderCreated(
+        event
+    ): Promise<void> {
+        await rabbitMq.publish(
+            "order.created",
+            event
+        );
+    }
+};
+
+const app =
+    createOrderApp({
         orderService,
         orderCreatedPublisher,
         logger
-    } = dependencies;
+    });
 
-    const app = express();
+async function start(): Promise<void> {
+    await rabbitMq.connect();
 
-    app.use(express.json());
-
-    app.get(
-        "/health",
-        (
-            _request: Request,
-            response: Response
-        ) => {
-            response.json({
-                status: "Healthy",
-                service: "order-service"
-            });
-        }
-    );
-
-    app.post(
-        "/orders",
-        async (
-            request: Request,
-            response: Response
-        ) => {
-            const validationResult =
-                parseCreateOrderRequest(
-                    request.body
-                );
-
-            if (!validationResult.success) {
-                logger.warn(
-                    "Rejected invalid order request",
-                    {
-                        validationIssues:
-                            validationResult
-                                .error
-                                .issues
-                                .map(issue => ({
-                                    path:
-                                        issue.path
-                                            .join("."),
-                                    code:
-                                        issue.code,
-                                    message:
-                                        issue.message
-                                }))
-                    }
-                );
-
-                return response
-                    .status(400)
-                    .json({
-                        error:
-                            "Invalid order request. " +
-                            "Expected customerId and " +
-                            "at least one order item " +
-                            "with productId, quantity " +
-                            "and unitPrice."
-                    });
-            }
-
-            const result =
-                orderService.createOrder(
-                    validationResult.data,
-                    request.header(
-                        "x-correlation-id"
-                    )
-                );
-
-            await orderCreatedPublisher
-                .publishOrderCreated(
-                    result.event
-                );
-
+    app.listen(
+        port,
+        () => {
             logger.info(
-                "Created order",
+                "Service listening",
                 {
-                    orderId:
-                        result.response.orderId,
-                    eventId:
-                        result.event.eventId,
-                    customerId:
-                        validationResult
-                            .data.customerId,
-                    correlationId:
-                        result.response
-                            .correlationId,
-                    totalAmount:
-                        result.response
-                            .totalAmount,
-                    itemCount:
-                        validationResult
-                            .data.items.length
+                    port
                 }
             );
+        }
+    );
+}
 
-            return response
-                .status(201)
-                .json(result.response);
+start().catch(error => {
+    logger.error(
+        "Failed to start service",
+        error,
+        {
+            port
         }
     );
 
-    return app;
-}
+    process.exit(1);
+});
+
+process.on(
+    "SIGINT",
+    async () => {
+        logger.info(
+            "Service shutting down"
+        );
+
+        await rabbitMq.close();
+
+        process.exit(0);
+    }
+);
