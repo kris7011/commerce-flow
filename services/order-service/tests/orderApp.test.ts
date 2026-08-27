@@ -18,7 +18,8 @@ import type {
 } from "@commerce-flow/logging";
 import {
     createOrderApp,
-    type OrderCreatedPublisher
+    type OrderCreatedPublisher,
+    type ReadinessProbe
 } from "../src/app.js";
 import {
     OrderService
@@ -26,6 +27,20 @@ import {
 
 const fixedTime =
     "2026-08-02T12:00:00.000Z";
+
+const readyProbe:
+    ReadinessProbe = {
+    isReady(): boolean {
+        return true;
+    }
+};
+
+const notReadyProbe:
+    ReadinessProbe = {
+    isReady(): boolean {
+        return false;
+    }
+};
 
 const silentLogger:
     AppLogger = {
@@ -61,7 +76,10 @@ test(
                     createOrderService([]),
                 orderCreatedPublisher:
                     publisher,
-                logger: silentLogger
+                logger:
+                    silentLogger,
+                readinessProbe:
+                    readyProbe
             });
 
         await withTestServer(
@@ -86,9 +104,124 @@ test(
                 assert.deepEqual(
                     body,
                     {
-                        status: "Healthy",
+                        status:
+                            "Healthy",
                         service:
                             "order-service"
+                    }
+                );
+
+                assert.equal(
+                    publisher.events.length,
+                    0
+                );
+            }
+        );
+    }
+);
+
+test(
+    "returns ready when RabbitMQ is available",
+    async () => {
+        const publisher =
+            new RecordingOrderCreatedPublisher();
+
+        const app =
+            createOrderApp({
+                orderService:
+                    createOrderService([]),
+                orderCreatedPublisher:
+                    publisher,
+                logger:
+                    silentLogger,
+                readinessProbe:
+                    readyProbe
+            });
+
+        await withTestServer(
+            app,
+            async baseUrl => {
+                const response =
+                    await fetch(
+                        `${baseUrl}/ready`
+                    );
+
+                assert.equal(
+                    response.status,
+                    200
+                );
+
+                const body =
+                    await response.json();
+
+                assert.deepEqual(
+                    body,
+                    {
+                        status:
+                            "Ready",
+                        service:
+                            "order-service",
+                        dependencies: {
+                            rabbitMq:
+                                "Ready"
+                        }
+                    }
+                );
+
+                assert.equal(
+                    publisher.events.length,
+                    0
+                );
+            }
+        );
+    }
+);
+
+test(
+    "returns not ready when RabbitMQ is unavailable",
+    async () => {
+        const publisher =
+            new RecordingOrderCreatedPublisher();
+
+        const app =
+            createOrderApp({
+                orderService:
+                    createOrderService([]),
+                orderCreatedPublisher:
+                    publisher,
+                logger:
+                    silentLogger,
+                readinessProbe:
+                    notReadyProbe
+            });
+
+        await withTestServer(
+            app,
+            async baseUrl => {
+                const response =
+                    await fetch(
+                        `${baseUrl}/ready`
+                    );
+
+                assert.equal(
+                    response.status,
+                    503
+                );
+
+                const body =
+                    await response.json();
+
+                assert.deepEqual(
+                    body,
+                    {
+                        status:
+                            "NotReady",
+                        service:
+                            "order-service",
+                        dependencies: {
+                            rabbitMq:
+                                "NotReady"
+                        }
                     }
                 );
 
@@ -113,7 +246,10 @@ test(
                     createOrderService([]),
                 orderCreatedPublisher:
                     publisher,
-                logger: silentLogger
+                logger:
+                    silentLogger,
+                readinessProbe:
+                    readyProbe
             });
 
         await withTestServer(
@@ -128,11 +264,12 @@ test(
                                 "content-type":
                                     "application/json"
                             },
-                            body: JSON.stringify({
-                                customerId:
-                                    "customer-001",
-                                items: []
-                            })
+                            body:
+                                JSON.stringify({
+                                    customerId:
+                                        "customer-001",
+                                    items: []
+                                })
                         }
                     );
 
@@ -175,7 +312,10 @@ test(
                     ]),
                 orderCreatedPublisher:
                     publisher,
-                logger: silentLogger
+                logger:
+                    silentLogger,
+                readinessProbe:
+                    readyProbe
             });
 
         await withTestServer(
@@ -192,19 +332,21 @@ test(
                                 "x-correlation-id":
                                     "correlation-001"
                             },
-                            body: JSON.stringify({
-                                customerId:
-                                    "customer-001",
-                                items: [
-                                    {
-                                        productId:
-                                            "washing-machine-01",
-                                        quantity: 2,
-                                        unitPrice:
-                                            4999.95
-                                    }
-                                ]
-                            })
+                            body:
+                                JSON.stringify({
+                                    customerId:
+                                        "customer-001",
+                                    items: [
+                                        {
+                                            productId:
+                                                "washing-machine-01",
+                                            quantity:
+                                                2,
+                                            unitPrice:
+                                                4999.95
+                                        }
+                                    ]
+                                })
                         }
                     );
 
@@ -255,7 +397,8 @@ test(
                                 {
                                     productId:
                                         "washing-machine-01",
-                                    quantity: 2,
+                                    quantity:
+                                        2,
                                     unitPrice:
                                         4999.95
                                 }
@@ -288,7 +431,9 @@ test(
                     ]),
                 orderCreatedPublisher:
                     publisher,
-                logger
+                logger,
+                readinessProbe:
+                    readyProbe
             });
 
         await withTestServer(
@@ -457,6 +602,7 @@ class RecordingOrderAppLogger
         return this;
     }
 }
+
 class RecordingOrderCreatedPublisher
     implements OrderCreatedPublisher {
     readonly events:
@@ -465,7 +611,9 @@ class RecordingOrderCreatedPublisher
     async publishOrderCreated(
         event: OrderCreatedEvent
     ): Promise<void> {
-        this.events.push(event);
+        this.events.push(
+            event
+        );
     }
 }
 
@@ -492,6 +640,7 @@ function createOrderService(
 
             return generatedId;
         },
+
         getCurrentTime: () =>
             fixedTime
     });
@@ -525,7 +674,9 @@ async function withTestServer(
         address === null ||
         typeof address === "string"
     ) {
-        await closeServer(server);
+        await closeServer(
+            server
+        );
 
         throw new Error(
             "The test server did not " +
@@ -541,9 +692,13 @@ async function withTestServer(
         `${tcpAddress.port}`;
 
     try {
-        await action(baseUrl);
+        await action(
+            baseUrl
+        );
     } finally {
-        await closeServer(server);
+        await closeServer(
+            server
+        );
     }
 }
 
@@ -551,15 +706,23 @@ function closeServer(
     server: Server
 ): Promise<void> {
     return new Promise(
-        (resolve, reject) => {
-            server.close(error => {
-                if (error) {
-                    reject(error);
-                    return;
-                }
+        (
+            resolve,
+            reject
+        ) => {
+            server.close(
+                error => {
+                    if (error) {
+                        reject(
+                            error
+                        );
 
-                resolve();
-            });
+                        return;
+                    }
+
+                    resolve();
+                }
+            );
         }
     );
 }
