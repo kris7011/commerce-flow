@@ -120,6 +120,7 @@ The Notification Service currently stores notifications in memory. It does not p
 | Reliability          | Connection retry and dead-letter handling              |
 | Consistency          | Idempotent event processing                            |
 | Traceability         | Correlation identifiers across services                |
+| Observability        | Structured JSON logging with service and workflow context |
 | Service design       | Independent business responsibilities                  |
 | API design           | Express-based HTTP endpoints                           |
 | Development          | TypeScript monorepo using npm workspaces               |
@@ -603,6 +604,16 @@ commerce-flow/
 │   │   ├── package.json
 │   │   └── tsconfig.json
 │   │
+│   ├── logging/
+│   │   ├── src/
+│   │   │   ├── index.ts
+│   │   │   └── structuredLogger.ts
+│   │   ├── tests/
+│   │   │   ├── structuredLogger.test.ts
+│   │   │   └── tsconfig.json
+│   │   ├── package.json
+│   │   └── tsconfig.json
+│   │
 │   └── messaging/
 │       ├── src/
 │       │   ├── rabbitMqClient.ts
@@ -624,6 +635,7 @@ commerce-flow/
 │   │   │   └── orderService.ts
 │   │   └── tests/
 │   │       ├── orderApp.test.ts
+│   │       ├── orderRequestValidator.test.ts
 │   │       └── orderService.test.ts
 │   │
 │   ├── payment-service/
@@ -689,6 +701,7 @@ commerce-flow/
 | Workspace                             | Responsibility                                                 |
 | ------------------------------------- | -------------------------------------------------------------- |
 | `@commerce-flow/contracts`            | Shared event envelopes, payloads and event types               |
+| `@commerce-flow/logging`              | Structured JSON logging and contextual application logs       |
 | `@commerce-flow/messaging`            | RabbitMQ connection, publishing, subscriptions and reliability |
 | `@commerce-flow/order-service`        | Order creation and `OrderCreated` publishing                   |
 | `@commerce-flow/payment-service`      | Payment authorization and `PaymentAuthorized` publishing       |
@@ -728,6 +741,14 @@ Business behaviour remains inside the individual services.
 * Dead-letter queues
 * Correlation identifiers
 * Idempotent consumers
+
+### Logging
+
+* Shared `@commerce-flow/logging` workspace
+* Structured JSON logs
+* Service and workflow context
+* Structured error serialization
+* Child loggers with inherited context
 
 ### Testing
 
@@ -1128,17 +1149,18 @@ npm test
 
 The root command executes test scripts in workspaces where they exist.
 
-All five services and the shared messaging client include unit and component tests for their isolated behaviour.
+All five services, the shared messaging client and the shared logging package include unit and component tests for their isolated behaviour.
 
 | Workspace            |  Tests | Covered behaviour                                                                                                                               |
 | -------------------- | -----: | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| Messaging            |      9 | Connection retry, publishing, queue topology, dead-letter routing, acknowledgements, duplicate handling and reconnecting                        |
-| Order Service        |     10 | Zod request validation, correlation identifiers, totals, event creation, HTTP endpoints and publishing through an injected publisher             |
-| Payment Service      |      6 | Payment event creation, data preservation, health endpoint, event coordination and publisher failure propagation                                |
-| Inventory Service    |      9 | Reservation rules, health and stock endpoints, successful and failed event coordination, logging and publisher failure propagation              |
-| Delivery Service     |      7 | Delivery creation, date calculation, health endpoint, event coordination, workflow identifiers and publisher failure propagation                |
-| Notification Service |      9 | Notification creation, defensive copies, health and notification endpoints, both event-handler paths and logging                               |
-| **Total**            | **50** |                                                                                                                                                 |
+| Logging              |      5 | JSON serialization, log levels, error serialization, child loggers and inherited context                                                        |
+| Messaging            |     11 | Connection retry, publishing, queue topology, dead-letter routing, acknowledgements, duplicate handling, reconnecting and structured logging    |
+| Order Service        |     11 | Zod request validation, correlation identifiers, totals, event creation, HTTP endpoints, publishing and structured request logging              |
+| Payment Service      |      6 | Payment event creation, data preservation, health endpoint, structured event coordination and publisher failure propagation                     |
+| Inventory Service    |      9 | Reservation rules, health and stock endpoints, structured success and failure logging and publisher failure propagation                         |
+| Delivery Service     |      7 | Delivery creation, date calculation, health endpoint, structured event coordination, workflow identifiers and publisher failure propagation     |
+| Notification Service |      9 | Notification creation, defensive copies, health and notification endpoints, both event-handler paths and structured logging                    |
+| **Total**            | **58** |                                                                                                                                                 |
 
 These tests do not require RabbitMQ or separately running service processes.
 
@@ -1147,6 +1169,8 @@ The HTTP application tests create temporary in-process Express servers on dynami
 The event-handler tests inject recording publishers and loggers to verify coordination, produced results and failure propagation without RabbitMQ.
 
 The messaging tests use fake connection and channel implementations to verify the behaviour of `RabbitMqClient`.
+
+The logging tests verify structured JSON serialization, log levels, error serialization and inherited child-logger context.
 
 ### RabbitMQ integration test
 
@@ -1629,10 +1653,10 @@ A deployed environment should include:
 * [x] Node.js 20 and 22 CI matrix
 * [x] Dependency vulnerability remediation
 * [x] Runtime request validation with Zod
+* [x] Structured JSON logging across messaging and all services
 
 ### Next improvements
 
-* [ ] Add structured logging
 * [ ] Add dependency-aware readiness endpoints
 * [ ] Add persistent inventory storage
 * [ ] Add persistent notification storage
@@ -1925,7 +1949,7 @@ CommerceFlow is under active development as a portfolio and architectural learni
 
 The current version demonstrates a complete event-driven workflow from order creation through payment, inventory, delivery and customer notification.
 
-Service business logic, HTTP applications, event handlers and the shared messaging client are covered by 50 unit and component tests.
+Service business logic, HTTP applications, event handlers, the shared messaging client and the shared logging package are covered by 58 unit and component tests.
 
 A RabbitMQ integration test verifies publishing, routing, consumption and message metadata against a real broker.
 
@@ -1937,7 +1961,9 @@ All five services now separate HTTP application construction from process startu
 
 The Order Service validates incoming `POST /orders` payloads at runtime with a Zod schema before passing typed data into the business service.
 
-Future iterations will focus on structured logging, dependency-aware readiness checks, durable persistence, observability and stronger delivery guarantees.
+Messaging and all five services use the shared structured logger to emit JSON logs with service, event and workflow context such as event identifiers, order identifiers and correlation identifiers.
+
+Future iterations will focus on dependency-aware readiness checks, durable persistence, observability and stronger delivery guarantees.
 
 ---
 
