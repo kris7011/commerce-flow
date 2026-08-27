@@ -10,14 +10,32 @@ import type {
 } from "node:net";
 import test from "node:test";
 import {
-    createDeliveryApp
+    createDeliveryApp,
+    type ReadinessProbe
 } from "../src/app.js";
+
+const readyProbe:
+    ReadinessProbe = {
+    isReady(): boolean {
+        return true;
+    }
+};
+
+const notReadyProbe:
+    ReadinessProbe = {
+    isReady(): boolean {
+        return false;
+    }
+};
 
 test(
     "returns the Delivery Service health response",
     async () => {
         const app =
-            createDeliveryApp();
+            createDeliveryApp({
+                readinessProbe:
+                    readyProbe
+            });
 
         await withTestServer(
             app,
@@ -41,9 +59,96 @@ test(
                 assert.deepEqual(
                     body,
                     {
-                        status: "Healthy",
+                        status:
+                            "Healthy",
                         service:
                             "delivery-service"
+                    }
+                );
+            }
+        );
+    }
+);
+
+test(
+    "returns ready when RabbitMQ is available",
+    async () => {
+        const app =
+            createDeliveryApp({
+                readinessProbe:
+                    readyProbe
+            });
+
+        await withTestServer(
+            app,
+            async baseUrl => {
+                const response =
+                    await fetch(
+                        `${baseUrl}/ready`
+                    );
+
+                assert.equal(
+                    response.status,
+                    200
+                );
+
+                const body =
+                    await response.json();
+
+                assert.deepEqual(
+                    body,
+                    {
+                        status:
+                            "Ready",
+                        service:
+                            "delivery-service",
+                        dependencies: {
+                            rabbitMq:
+                                "Ready"
+                        }
+                    }
+                );
+            }
+        );
+    }
+);
+
+test(
+    "returns not ready when RabbitMQ is unavailable",
+    async () => {
+        const app =
+            createDeliveryApp({
+                readinessProbe:
+                    notReadyProbe
+            });
+
+        await withTestServer(
+            app,
+            async baseUrl => {
+                const response =
+                    await fetch(
+                        `${baseUrl}/ready`
+                    );
+
+                assert.equal(
+                    response.status,
+                    503
+                );
+
+                const body =
+                    await response.json();
+
+                assert.deepEqual(
+                    body,
+                    {
+                        status:
+                            "NotReady",
+                        service:
+                            "delivery-service",
+                        dependencies: {
+                            rabbitMq:
+                                "NotReady"
+                        }
                     }
                 );
             }
@@ -79,7 +184,9 @@ async function withTestServer(
         address === null ||
         typeof address === "string"
     ) {
-        await closeServer(server);
+        await closeServer(
+            server
+        );
 
         throw new Error(
             "The test server did not " +
@@ -95,9 +202,13 @@ async function withTestServer(
         `${tcpAddress.port}`;
 
     try {
-        await action(baseUrl);
+        await action(
+            baseUrl
+        );
     } finally {
-        await closeServer(server);
+        await closeServer(
+            server
+        );
     }
 }
 
@@ -105,15 +216,23 @@ function closeServer(
     server: Server
 ): Promise<void> {
     return new Promise(
-        (resolve, reject) => {
-            server.close(error => {
-                if (error) {
-                    reject(error);
-                    return;
-                }
+        (
+            resolve,
+            reject
+        ) => {
+            server.close(
+                error => {
+                    if (error) {
+                        reject(
+                            error
+                        );
 
-                resolve();
-            });
+                        return;
+                    }
+
+                    resolve();
+                }
+            );
         }
     );
 }

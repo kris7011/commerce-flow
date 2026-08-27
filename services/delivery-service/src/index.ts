@@ -61,7 +61,10 @@ const handleInventoryReserved =
     });
 
 const app =
-    createDeliveryApp();
+    createDeliveryApp({
+        readinessProbe:
+            rabbitMq
+    });
 
 async function start(): Promise<void> {
     await rabbitMq.connect();
