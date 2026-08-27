@@ -13,7 +13,8 @@ import type {
     DeliveryBookedEvent
 } from "@commerce-flow/contracts";
 import {
-    createNotificationApp
+    createNotificationApp,
+    type ReadinessProbe
 } from "../src/app.js";
 import {
     NotificationService
@@ -21,6 +22,20 @@ import {
 
 const fixedTime =
     "2026-08-06T08:00:00.000Z";
+
+const readyProbe:
+    ReadinessProbe = {
+    isReady(): boolean {
+        return true;
+    }
+};
+
+const notReadyProbe:
+    ReadinessProbe = {
+    isReady(): boolean {
+        return false;
+    }
+};
 
 test(
     "returns the Notification Service health response",
@@ -31,7 +46,9 @@ test(
         const app =
             createNotificationApp({
                 notificationReader:
-                    notificationService
+                    notificationService,
+                readinessProbe:
+                    readyProbe
             });
 
         await withTestServer(
@@ -56,9 +73,106 @@ test(
                 assert.deepEqual(
                     body,
                     {
-                        status: "Healthy",
+                        status:
+                            "Healthy",
                         service:
                             "notification-service"
+                    }
+                );
+            }
+        );
+    }
+);
+
+test(
+    "returns ready when RabbitMQ is available",
+    async () => {
+        const notificationService =
+            createNotificationService([]);
+
+        const app =
+            createNotificationApp({
+                notificationReader:
+                    notificationService,
+                readinessProbe:
+                    readyProbe
+            });
+
+        await withTestServer(
+            app,
+            async baseUrl => {
+                const response =
+                    await fetch(
+                        `${baseUrl}/ready`
+                    );
+
+                assert.equal(
+                    response.status,
+                    200
+                );
+
+                const body =
+                    await response.json();
+
+                assert.deepEqual(
+                    body,
+                    {
+                        status:
+                            "Ready",
+                        service:
+                            "notification-service",
+                        dependencies: {
+                            rabbitMq:
+                                "Ready"
+                        }
+                    }
+                );
+            }
+        );
+    }
+);
+
+test(
+    "returns not ready when RabbitMQ is unavailable",
+    async () => {
+        const notificationService =
+            createNotificationService([]);
+
+        const app =
+            createNotificationApp({
+                notificationReader:
+                    notificationService,
+                readinessProbe:
+                    notReadyProbe
+            });
+
+        await withTestServer(
+            app,
+            async baseUrl => {
+                const response =
+                    await fetch(
+                        `${baseUrl}/ready`
+                    );
+
+                assert.equal(
+                    response.status,
+                    503
+                );
+
+                const body =
+                    await response.json();
+
+                assert.deepEqual(
+                    body,
+                    {
+                        status:
+                            "NotReady",
+                        service:
+                            "notification-service",
+                        dependencies: {
+                            rabbitMq:
+                                "NotReady"
+                        }
                     }
                 );
             }
@@ -82,7 +196,9 @@ test(
         const app =
             createNotificationApp({
                 notificationReader:
-                    notificationService
+                    notificationService,
+                readinessProbe:
+                    readyProbe
             });
 
         await withTestServer(
@@ -154,6 +270,7 @@ function createNotificationService(
 
             return generatedId;
         },
+
         getCurrentTime: () =>
             fixedTime
     });
@@ -211,7 +328,9 @@ async function withTestServer(
         address === null ||
         typeof address === "string"
     ) {
-        await closeServer(server);
+        await closeServer(
+            server
+        );
 
         throw new Error(
             "The test server did not " +
@@ -227,9 +346,13 @@ async function withTestServer(
         `${tcpAddress.port}`;
 
     try {
-        await action(baseUrl);
+        await action(
+            baseUrl
+        );
     } finally {
-        await closeServer(server);
+        await closeServer(
+            server
+        );
     }
 }
 
@@ -237,15 +360,23 @@ function closeServer(
     server: Server
 ): Promise<void> {
     return new Promise(
-        (resolve, reject) => {
-            server.close(error => {
-                if (error) {
-                    reject(error);
-                    return;
-                }
+        (
+            resolve,
+            reject
+        ) => {
+            server.close(
+                error => {
+                    if (error) {
+                        reject(
+                            error
+                        );
 
-                resolve();
-            });
+                        return;
+                    }
+
+                    resolve();
+                }
+            );
         }
     );
 }

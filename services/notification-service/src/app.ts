@@ -13,9 +13,16 @@ export interface NotificationReader {
         readonly CustomerNotification[];
 }
 
+export interface ReadinessProbe {
+    isReady(): boolean;
+}
+
 export interface NotificationAppDependencies {
     readonly notificationReader:
     NotificationReader;
+
+    readonly readinessProbe:
+    ReadinessProbe;
 }
 
 export function createNotificationApp(
@@ -23,7 +30,8 @@ export function createNotificationApp(
         NotificationAppDependencies
 ): Express {
     const {
-        notificationReader
+        notificationReader,
+        readinessProbe
     } = dependencies;
 
     const app = express();
@@ -39,6 +47,38 @@ export function createNotificationApp(
                 service:
                     "notification-service"
             });
+        }
+    );
+
+    app.get(
+        "/ready",
+        (
+            _request: Request,
+            response: Response
+        ) => {
+            const rabbitMqReady =
+                readinessProbe.isReady();
+
+            const status =
+                rabbitMqReady
+                    ? "Ready"
+                    : "NotReady";
+
+            return response
+                .status(
+                    rabbitMqReady
+                        ? 200
+                        : 503
+                )
+                .json({
+                    status,
+                    service:
+                        "notification-service",
+                    dependencies: {
+                        rabbitMq:
+                            status
+                    }
+                });
         }
     );
 
