@@ -10,9 +10,16 @@ export interface InventoryStockReader {
         Readonly<Record<string, number>>;
 }
 
+export interface ReadinessProbe {
+    isReady(): boolean;
+}
+
 export interface InventoryAppDependencies {
     readonly stockReader:
     InventoryStockReader;
+
+    readonly readinessProbe:
+    ReadinessProbe;
 }
 
 export function createInventoryApp(
@@ -20,7 +27,8 @@ export function createInventoryApp(
         InventoryAppDependencies
 ): Express {
     const {
-        stockReader
+        stockReader,
+        readinessProbe
     } = dependencies;
 
     const app = express();
@@ -35,6 +43,38 @@ export function createInventoryApp(
                 status: "Healthy",
                 service: "inventory-service"
             });
+        }
+    );
+
+    app.get(
+        "/ready",
+        (
+            _request: Request,
+            response: Response
+        ) => {
+            const rabbitMqReady =
+                readinessProbe.isReady();
+
+            const status =
+                rabbitMqReady
+                    ? "Ready"
+                    : "NotReady";
+
+            return response
+                .status(
+                    rabbitMqReady
+                        ? 200
+                        : 503
+                )
+                .json({
+                    status,
+                    service:
+                        "inventory-service",
+                    dependencies: {
+                        rabbitMq:
+                            status
+                    }
+                });
         }
     );
 

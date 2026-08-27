@@ -10,11 +10,26 @@ import type {
 } from "node:net";
 import test from "node:test";
 import {
-    createInventoryApp
+    createInventoryApp,
+    type ReadinessProbe
 } from "../src/app.js";
 import {
     InMemoryInventoryRepository
 } from "../src/inMemoryInventoryRepository.js";
+
+const readyProbe:
+    ReadinessProbe = {
+    isReady(): boolean {
+        return true;
+    }
+};
+
+const notReadyProbe:
+    ReadinessProbe = {
+    isReady(): boolean {
+        return false;
+    }
+};
 
 test(
     "returns the Inventory Service health response",
@@ -25,7 +40,9 @@ test(
         const app =
             createInventoryApp({
                 stockReader:
-                    repository
+                    repository,
+                readinessProbe:
+                    readyProbe
             });
 
         await withTestServer(
@@ -50,9 +67,106 @@ test(
                 assert.deepEqual(
                     body,
                     {
-                        status: "Healthy",
+                        status:
+                            "Healthy",
                         service:
                             "inventory-service"
+                    }
+                );
+            }
+        );
+    }
+);
+
+test(
+    "returns ready when RabbitMQ is available",
+    async () => {
+        const repository =
+            createRepository();
+
+        const app =
+            createInventoryApp({
+                stockReader:
+                    repository,
+                readinessProbe:
+                    readyProbe
+            });
+
+        await withTestServer(
+            app,
+            async baseUrl => {
+                const response =
+                    await fetch(
+                        `${baseUrl}/ready`
+                    );
+
+                assert.equal(
+                    response.status,
+                    200
+                );
+
+                const body =
+                    await response.json();
+
+                assert.deepEqual(
+                    body,
+                    {
+                        status:
+                            "Ready",
+                        service:
+                            "inventory-service",
+                        dependencies: {
+                            rabbitMq:
+                                "Ready"
+                        }
+                    }
+                );
+            }
+        );
+    }
+);
+
+test(
+    "returns not ready when RabbitMQ is unavailable",
+    async () => {
+        const repository =
+            createRepository();
+
+        const app =
+            createInventoryApp({
+                stockReader:
+                    repository,
+                readinessProbe:
+                    notReadyProbe
+            });
+
+        await withTestServer(
+            app,
+            async baseUrl => {
+                const response =
+                    await fetch(
+                        `${baseUrl}/ready`
+                    );
+
+                assert.equal(
+                    response.status,
+                    503
+                );
+
+                const body =
+                    await response.json();
+
+                assert.deepEqual(
+                    body,
+                    {
+                        status:
+                            "NotReady",
+                        service:
+                            "inventory-service",
+                        dependencies: {
+                            rabbitMq:
+                                "NotReady"
+                        }
                     }
                 );
             }
@@ -78,7 +192,9 @@ test(
         const app =
             createInventoryApp({
                 stockReader:
-                    repository
+                    repository,
+                readinessProbe:
+                    readyProbe
             });
 
         await withTestServer(
@@ -158,7 +274,9 @@ async function withTestServer(
         address === null ||
         typeof address === "string"
     ) {
-        await closeServer(server);
+        await closeServer(
+            server
+        );
 
         throw new Error(
             "The test server did not " +
@@ -174,9 +292,13 @@ async function withTestServer(
         `${tcpAddress.port}`;
 
     try {
-        await action(baseUrl);
+        await action(
+            baseUrl
+        );
     } finally {
-        await closeServer(server);
+        await closeServer(
+            server
+        );
     }
 }
 
@@ -184,15 +306,23 @@ function closeServer(
     server: Server
 ): Promise<void> {
     return new Promise(
-        (resolve, reject) => {
-            server.close(error => {
-                if (error) {
-                    reject(error);
-                    return;
-                }
+        (
+            resolve,
+            reject
+        ) => {
+            server.close(
+                error => {
+                    if (error) {
+                        reject(
+                            error
+                        );
 
-                resolve();
-            });
+                        return;
+                    }
+
+                    resolve();
+                }
+            );
         }
     );
 }

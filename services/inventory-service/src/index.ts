@@ -95,7 +95,9 @@ const handlePaymentAuthorized =
 const app =
     createInventoryApp({
         stockReader:
-            inventoryRepository
+            inventoryRepository,
+        readinessProbe:
+            rabbitMq
     });
 
 async function start(): Promise<void> {
