@@ -4,9 +4,12 @@ import type {
     DeliveryBookedEvent,
     InventoryReservationFailedEvent
 } from "@commerce-flow/contracts";
+import type {
+    AppLogger,
+    LogContext
+} from "@commerce-flow/logging";
 import {
-    createNotificationEventHandler,
-    type NotificationEventLogger
+    createNotificationEventHandler
 } from "../src/notificationEventHandler.js";
 import {
     NotificationService
@@ -61,14 +64,30 @@ test(
         );
 
         assert.deepEqual(
-            logger.messages,
+            logger.infoLogs,
             [
-                "[notification-service] " +
-                "Customer notification created " +
-                "for booked delivery on order " +
-                "'order-001' " +
-                "with correlationId " +
-                "'correlation-001'"
+                {
+                    message:
+                        "Created customer notification",
+                    context: {
+                        eventId:
+                            "delivery-event-001",
+                        notificationId:
+                            "notification-001",
+                        notificationType:
+                            "DeliveryBooked",
+                        orderId:
+                            "order-001",
+                        correlationId:
+                            "correlation-001",
+                        deliveryId:
+                            "delivery-001",
+                        carrier:
+                            "DefaultCarrier",
+                        estimatedDeliveryDate:
+                            "2026-08-09"
+                    }
+                }
             ]
         );
     }
@@ -122,27 +141,87 @@ test(
         );
 
         assert.deepEqual(
-            logger.messages,
+            logger.infoLogs,
             [
-                "[notification-service] " +
-                "Customer notification created " +
-                "for failed inventory " +
-                "reservation on order " +
-                "'order-002' " +
-                "with correlationId " +
-                "'correlation-002'"
+                {
+                    message:
+                        "Created customer notification",
+                    context: {
+                        eventId:
+                            "inventory-event-002",
+                        notificationId:
+                            "notification-002",
+                        notificationType:
+                            "InventoryReservationFailed",
+                        orderId:
+                            "order-002",
+                        correlationId:
+                            "correlation-002",
+                        reason:
+                            "Insufficient stock",
+                        unavailableItemCount:
+                            1
+                    }
+                }
             ]
         );
     }
 );
 
 class RecordingNotificationLogger
-    implements NotificationEventLogger {
-    readonly messages:
-        string[] = [];
+    implements AppLogger {
+    readonly infoLogs: {
+        message: string;
+        context?: LogContext;
+    }[] = [];
 
-    log(message: string): void {
-        this.messages.push(message);
+    readonly warningLogs: {
+        message: string;
+        context?: LogContext;
+    }[] = [];
+
+    readonly errorLogs: {
+        message: string;
+        error?: unknown;
+        context?: LogContext;
+    }[] = [];
+
+    info(
+        message: string,
+        context?: LogContext
+    ): void {
+        this.infoLogs.push({
+            message,
+            context
+        });
+    }
+
+    warn(
+        message: string,
+        context?: LogContext
+    ): void {
+        this.warningLogs.push({
+            message,
+            context
+        });
+    }
+
+    error(
+        message: string,
+        error?: unknown,
+        context?: LogContext
+    ): void {
+        this.errorLogs.push({
+            message,
+            error,
+            context
+        });
+    }
+
+    child(
+        _context: LogContext
+    ): AppLogger {
+        return this;
     }
 }
 

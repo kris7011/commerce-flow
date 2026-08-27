@@ -1,19 +1,18 @@
+import type {
+    AppLogger
+} from "@commerce-flow/logging";
 import {
     NotificationService,
     type CustomerNotification,
     type NotificationEvent
 } from "./notificationService.js";
 
-export interface NotificationEventLogger {
-    log(message: string): void;
-}
-
 export interface NotificationEventHandlerDependencies {
     readonly notificationService:
     NotificationService;
 
-    readonly logger?:
-    NotificationEventLogger;
+    readonly logger:
+    AppLogger;
 }
 
 export type NotificationEventHandler = (
@@ -26,7 +25,7 @@ export function createNotificationEventHandler(
 ): NotificationEventHandler {
     const {
         notificationService,
-        logger = console
+        logger
     } = dependencies;
 
     return async (
@@ -37,6 +36,7 @@ export function createNotificationEventHandler(
                 .createNotification(event);
 
         logNotificationCreated(
+            event,
             notification,
             logger
         );
@@ -44,39 +44,67 @@ export function createNotificationEventHandler(
 }
 
 function logNotificationCreated(
+    event: NotificationEvent,
     notification:
         CustomerNotification,
-    logger:
-        NotificationEventLogger
+    logger: AppLogger
 ): void {
-    switch (notification.type) {
+    switch (event.eventType) {
         case "DeliveryBooked":
-            logger.log(
-                `[notification-service] ` +
-                `Customer notification created ` +
-                `for booked delivery on order ` +
-                `'${notification.orderId}' ` +
-                `with correlationId ` +
-                `'${notification.correlationId}'`
+            logger.info(
+                "Created customer notification",
+                {
+                    eventId:
+                        event.eventId,
+                    notificationId:
+                        notification
+                            .notificationId,
+                    notificationType:
+                        notification.type,
+                    orderId:
+                        notification.orderId,
+                    correlationId:
+                        notification
+                            .correlationId,
+                    deliveryId:
+                        event.data.deliveryId,
+                    carrier:
+                        event.data.carrier,
+                    estimatedDeliveryDate:
+                        event.data
+                            .estimatedDeliveryDate
+                }
             );
             return;
 
         case "InventoryReservationFailed":
-            logger.log(
-                `[notification-service] ` +
-                `Customer notification created ` +
-                `for failed inventory reservation ` +
-                `on order ` +
-                `'${notification.orderId}' ` +
-                `with correlationId ` +
-                `'${notification.correlationId}'`
+            logger.info(
+                "Created customer notification",
+                {
+                    eventId:
+                        event.eventId,
+                    notificationId:
+                        notification
+                            .notificationId,
+                    notificationType:
+                        notification.type,
+                    orderId:
+                        notification.orderId,
+                    correlationId:
+                        notification
+                            .correlationId,
+                    reason:
+                        event.data.reason,
+                    unavailableItemCount:
+                        event.data
+                            .unavailableItems
+                            .length
+                }
             );
             return;
 
         default:
-            assertNever(
-                notification.type
-            );
+            assertNever(event);
     }
 }
 
@@ -84,7 +112,7 @@ function assertNever(
     value: never
 ): never {
     throw new Error(
-        `Unsupported notification type: ` +
-        `${value}`
+        `Unsupported notification event: ` +
+        `${JSON.stringify(value)}`
     );
 }
