@@ -1,79 +1,149 @@
+import express from "express";
+import type {
+    Express,
+    Request,
+    Response
+} from "express";
+import type {
+    OrderCreatedEvent
+} from "@commerce-flow/contracts";
+import type {
+    AppLogger
+} from "@commerce-flow/logging";
 import {
-    RabbitMqClient
-} from "@commerce-flow/messaging";
-import {
-    createOrderApp,
-    type OrderCreatedPublisher
-} from "./app.js";
+    parseCreateOrderRequest
+} from "./orderRequestValidator.js";
 import {
     OrderService
 } from "./orderService.js";
 
-const port =
-    Number(
-        process.env.ORDER_SERVICE_PORT ??
-        3001
-    );
-
-const rabbitMqUrl =
-    process.env.RABBITMQ_URL ??
-    "amqp://guest:guest@localhost:5672";
-
-const rabbitMq =
-    new RabbitMqClient(
-        rabbitMqUrl
-    );
-
-const orderService =
-    new OrderService();
-
-const orderCreatedPublisher:
-    OrderCreatedPublisher = {
-    async publishOrderCreated(
-        event
-    ): Promise<void> {
-        await rabbitMq.publish(
-            "order.created",
-            event
-        );
-    }
-};
-
-const app =
-    createOrderApp({
-        orderService,
-        orderCreatedPublisher
-    });
-
-async function start(): Promise<void> {
-    await rabbitMq.connect();
-
-    app.listen(
-        port,
-        () => {
-            console.log(
-                `[order-service] ` +
-                `Listening on port ${port}`
-            );
-        }
-    );
+export interface OrderCreatedPublisher {
+    publishOrderCreated(
+        event: OrderCreatedEvent
+    ): Promise<void>;
 }
 
-start().catch(error => {
-    console.error(
-        "[order-service] " +
-        "Failed to start service",
-        error
+export interface OrderAppDependencies {
+    readonly orderService:
+    OrderService;
+
+    readonly orderCreatedPublisher:
+    OrderCreatedPublisher;
+
+    readonly logger:
+    AppLogger;
+}
+
+export function createOrderApp(
+    dependencies:
+        OrderAppDependencies
+): Express {
+    const {
+        orderService,
+        orderCreatedPublisher,
+        logger
+    } = dependencies;
+
+    const app = express();
+
+    app.use(express.json());
+
+    app.get(
+        "/health",
+        (
+            _request: Request,
+            response: Response
+        ) => {
+            response.json({
+                status: "Healthy",
+                service: "order-service"
+            });
+        }
     );
 
-    process.exit(1);
-});
+    app.post(
+        "/orders",
+        async (
+            request: Request,
+            response: Response
+        ) => {
+            const validationResult =
+                parseCreateOrderRequest(
+                    request.body
+                );
 
-process.on(
-    "SIGINT",
-    async () => {
-        await rabbitMq.close();
+            if (!validationResult.success) {
+                logger.warn(
+                    "Rejected invalid order request",
+                    {
+                        validationIssues:
+                            validationResult
+                                .error
+                                .issues
+                                .map(issue => ({
+                                    path:
+                                        issue.path
+                                            .join("."),
+                                    code:
+                                        issue.code,
+                                    message:
+                                        issue.message
+                                }))
+                    }
+                );
 
-        process.exit(0);
-    }
-);
+                return response
+                    .status(400)
+                    .json({
+                        error:
+                            "Invalid order request. " +
+                            "Expected customerId and " +
+                            "at least one order item " +
+                            "with productId, quantity " +
+                            "and unitPrice."
+                    });
+            }
+
+            const result =
+                orderService.createOrder(
+                    validationResult.data,
+                    request.header(
+                        "x-correlation-id"
+                    )
+                );
+
+            await orderCreatedPublisher
+                .publishOrderCreated(
+                    result.event
+                );
+
+            logger.info(
+                "Created order",
+                {
+                    orderId:
+                        result.response.orderId,
+                    eventId:
+                        result.event.eventId,
+                    customerId:
+                        validationResult
+                            .data.customerId,
+                    correlationId:
+                        result.response
+                            .correlationId,
+                    totalAmount:
+                        result.response
+                            .totalAmount,
+                    itemCount:
+                        validationResult
+                            .data.items.length
+                }
+            );
+
+            return response
+                .status(201)
+                .json(result.response);
+        }
+    );
+
+    return app;
+}

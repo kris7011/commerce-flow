@@ -7,6 +7,9 @@ import type {
 import type {
     OrderCreatedEvent
 } from "@commerce-flow/contracts";
+import type {
+    AppLogger
+} from "@commerce-flow/logging";
 import {
     parseCreateOrderRequest
 } from "./orderRequestValidator.js";
@@ -20,10 +23,6 @@ export interface OrderCreatedPublisher {
     ): Promise<void>;
 }
 
-export interface OrderAppLogger {
-    log(message: string): void;
-}
-
 export interface OrderAppDependencies {
     readonly orderService:
     OrderService;
@@ -31,8 +30,8 @@ export interface OrderAppDependencies {
     readonly orderCreatedPublisher:
     OrderCreatedPublisher;
 
-    readonly logger?:
-    OrderAppLogger;
+    readonly logger:
+    AppLogger;
 }
 
 export function createOrderApp(
@@ -42,7 +41,7 @@ export function createOrderApp(
     const {
         orderService,
         orderCreatedPublisher,
-        logger = console
+        logger
     } = dependencies;
 
     const app = express();
@@ -74,6 +73,25 @@ export function createOrderApp(
                 );
 
             if (!validationResult.success) {
+                logger.warn(
+                    "Rejected invalid order request",
+                    {
+                        validationIssues:
+                            validationResult
+                                .error
+                                .issues
+                                .map(issue => ({
+                                    path:
+                                        issue.path
+                                            .join("."),
+                                    code:
+                                        issue.code,
+                                    message:
+                                        issue.message
+                                }))
+                    }
+                );
+
                 return response
                     .status(400)
                     .json({
@@ -99,11 +117,26 @@ export function createOrderApp(
                     result.event
                 );
 
-            logger.log(
-                `[order-service] Created order ` +
-                `'${result.response.orderId}' ` +
-                `with correlationId ` +
-                `'${result.response.correlationId}'`
+            logger.info(
+                "Created order",
+                {
+                    orderId:
+                        result.response.orderId,
+                    eventId:
+                        result.event.eventId,
+                    customerId:
+                        validationResult
+                            .data.customerId,
+                    correlationId:
+                        result.response
+                            .correlationId,
+                    totalAmount:
+                        result.response
+                            .totalAmount,
+                    itemCount:
+                        validationResult
+                            .data.items.length
+                }
             );
 
             return response
