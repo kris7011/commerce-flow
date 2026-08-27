@@ -2,6 +2,9 @@ import type {
     PaymentAuthorizedEvent
 } from "@commerce-flow/contracts";
 import {
+    createStructuredLogger
+} from "@commerce-flow/logging";
+import {
     RabbitMqClient
 } from "@commerce-flow/messaging";
 import {
@@ -35,6 +38,11 @@ const initialStock:
     "dishwasher-01": 5,
     "dryer-01": 3
 };
+
+const logger =
+    createStructuredLogger(
+        "inventory-service"
+    );
 
 const rabbitMq =
     new RabbitMqClient(
@@ -80,7 +88,8 @@ const inventoryResultPublisher:
 const handlePaymentAuthorized =
     createPaymentAuthorizedHandler({
         inventoryService,
-        inventoryResultPublisher
+        inventoryResultPublisher,
+        logger
     });
 
 const app =
@@ -105,19 +114,23 @@ async function start(): Promise<void> {
     app.listen(
         port,
         () => {
-            console.log(
-                `[inventory-service] ` +
-                `Listening on port ${port}`
+            logger.info(
+                "Service listening",
+                {
+                    port
+                }
             );
         }
     );
 }
 
 start().catch(error => {
-    console.error(
-        "[inventory-service] " +
+    logger.error(
         "Failed to start service",
-        error
+        error,
+        {
+            port
+        }
     );
 
     process.exit(1);
@@ -126,6 +139,10 @@ start().catch(error => {
 process.on(
     "SIGINT",
     async () => {
+        logger.info(
+            "Service shutting down"
+        );
+
         await rabbitMq.close();
 
         process.exit(0);

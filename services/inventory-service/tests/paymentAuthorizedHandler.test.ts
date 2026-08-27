@@ -4,6 +4,10 @@ import type {
     OrderItem,
     PaymentAuthorizedEvent
 } from "@commerce-flow/contracts";
+import type {
+    AppLogger,
+    LogContext
+} from "@commerce-flow/logging";
 import {
     InMemoryInventoryRepository
 } from "../src/inMemoryInventoryRepository.js";
@@ -13,7 +17,6 @@ import {
 } from "../src/inventoryService.js";
 import {
     createPaymentAuthorizedHandler,
-    type InventoryEventLogger,
     type InventoryResultPublisher
 } from "../src/paymentAuthorizedHandler.js";
 
@@ -96,18 +99,48 @@ test(
         );
 
         assert.deepEqual(
-            logger.messages,
+            logger.infoLogs,
             [
-                "[inventory-service] " +
-                "Received PaymentAuthorized " +
-                "for order 'order-001' " +
-                "with correlationId " +
-                "'correlation-001'",
-
-                "[inventory-service] " +
-                "Reserved inventory " +
-                "for order 'order-001'"
+                {
+                    message:
+                        "Received PaymentAuthorized",
+                    context: {
+                        eventId:
+                            "payment-event-001",
+                        orderId:
+                            "order-001",
+                        paymentId:
+                            "payment-001",
+                        correlationId:
+                            "correlation-001",
+                        amount:
+                            9998,
+                        itemCount:
+                            1
+                    }
+                },
+                {
+                    message:
+                        "Reserved inventory",
+                    context: {
+                        eventId:
+                            "inventory-event-001",
+                        orderId:
+                            "order-001",
+                        reservationId:
+                            "reservation-001",
+                        correlationId:
+                            "correlation-001",
+                        itemCount:
+                            1
+                    }
+                }
             ]
+        );
+
+        assert.deepEqual(
+            logger.warningLogs,
+            []
         );
     }
 );
@@ -196,17 +229,58 @@ test(
         );
 
         assert.deepEqual(
-            logger.messages,
+            logger.infoLogs,
             [
-                "[inventory-service] " +
-                "Received PaymentAuthorized " +
-                "for order 'order-001' " +
-                "with correlationId " +
-                "'correlation-001'",
+                {
+                    message:
+                        "Received PaymentAuthorized",
+                    context: {
+                        eventId:
+                            "payment-event-001",
+                        orderId:
+                            "order-001",
+                        paymentId:
+                            "payment-001",
+                        correlationId:
+                            "correlation-001",
+                        amount:
+                            11996,
+                        itemCount:
+                            1
+                    }
+                }
+            ]
+        );
 
-                "[inventory-service] " +
-                "Inventory reservation failed " +
-                "for order 'order-001'"
+        assert.deepEqual(
+            logger.warningLogs,
+            [
+                {
+                    message:
+                        "Inventory reservation failed",
+                    context: {
+                        eventId:
+                            "inventory-event-001",
+                        orderId:
+                            "order-001",
+                        correlationId:
+                            "correlation-001",
+                        reason:
+                            "One or more products " +
+                            "are not available in " +
+                            "the requested quantity.",
+                        unavailableItems: [
+                            {
+                                productId:
+                                    "dryer-01",
+                                requestedQuantity:
+                                    4,
+                                availableQuantity:
+                                    3
+                            }
+                        ]
+                    }
+                }
             ]
         );
     }
@@ -262,14 +336,32 @@ test(
         );
 
         assert.deepEqual(
-            logger.messages,
+            logger.infoLogs,
             [
-                "[inventory-service] " +
-                "Received PaymentAuthorized " +
-                "for order 'order-001' " +
-                "with correlationId " +
-                "'correlation-001'"
+                {
+                    message:
+                        "Received PaymentAuthorized",
+                    context: {
+                        eventId:
+                            "payment-event-001",
+                        orderId:
+                            "order-001",
+                        paymentId:
+                            "payment-001",
+                        correlationId:
+                            "correlation-001",
+                        amount:
+                            11996,
+                        itemCount:
+                            1
+                    }
+                }
             ]
+        );
+
+        assert.deepEqual(
+            logger.warningLogs,
+            []
         );
 
         assert.deepEqual(
@@ -311,12 +403,59 @@ class FailingInventoryResultPublisher
 }
 
 class RecordingInventoryLogger
-    implements InventoryEventLogger {
-    readonly messages:
-        string[] = [];
+    implements AppLogger {
+    readonly infoLogs: {
+        message: string;
+        context?: LogContext;
+    }[] = [];
 
-    log(message: string): void {
-        this.messages.push(message);
+    readonly warningLogs: {
+        message: string;
+        context?: LogContext;
+    }[] = [];
+
+    readonly errorLogs: {
+        message: string;
+        error?: unknown;
+        context?: LogContext;
+    }[] = [];
+
+    info(
+        message: string,
+        context?: LogContext
+    ): void {
+        this.infoLogs.push({
+            message,
+            context
+        });
+    }
+
+    warn(
+        message: string,
+        context?: LogContext
+    ): void {
+        this.warningLogs.push({
+            message,
+            context
+        });
+    }
+
+    error(
+        message: string,
+        error?: unknown,
+        context?: LogContext
+    ): void {
+        this.errorLogs.push({
+            message,
+            error,
+            context
+        });
+    }
+
+    child(
+        _context: LogContext
+    ): AppLogger {
+        return this;
     }
 }
 

@@ -3,6 +3,9 @@ import type {
     InventoryReservedEvent,
     PaymentAuthorizedEvent
 } from "@commerce-flow/contracts";
+import type {
+    AppLogger
+} from "@commerce-flow/logging";
 import {
     InventoryService,
     type InventoryResultEvent
@@ -14,10 +17,6 @@ export interface InventoryResultPublisher {
     ): Promise<void>;
 }
 
-export interface InventoryEventLogger {
-    log(message: string): void;
-}
-
 export interface PaymentAuthorizedHandlerDependencies {
     readonly inventoryService:
     InventoryService;
@@ -25,8 +24,8 @@ export interface PaymentAuthorizedHandlerDependencies {
     readonly inventoryResultPublisher:
     InventoryResultPublisher;
 
-    readonly logger?:
-    InventoryEventLogger;
+    readonly logger:
+    AppLogger;
 }
 
 export type PaymentAuthorizedHandler = (
@@ -40,19 +39,28 @@ export function createPaymentAuthorizedHandler(
     const {
         inventoryService,
         inventoryResultPublisher,
-        logger = console
+        logger
     } = dependencies;
 
     return async (
         event: PaymentAuthorizedEvent
     ): Promise<void> => {
-        logger.log(
-            `[inventory-service] ` +
-            `Received PaymentAuthorized ` +
-            `for order ` +
-            `'${event.data.orderId}' ` +
-            `with correlationId ` +
-            `'${event.correlationId}'`
+        logger.info(
+            "Received PaymentAuthorized",
+            {
+                eventId:
+                    event.eventId,
+                orderId:
+                    event.data.orderId,
+                paymentId:
+                    event.data.paymentId,
+                correlationId:
+                    event.correlationId,
+                amount:
+                    event.data.amount,
+                itemCount:
+                    event.data.items.length
+            }
         );
 
         const resultEvent =
@@ -75,7 +83,7 @@ export function createPaymentAuthorizedHandler(
 
 function logInventoryResult(
     event: InventoryResultEvent,
-    logger: InventoryEventLogger
+    logger: AppLogger
 ): void {
     switch (event.eventType) {
         case "InventoryReserved":
@@ -99,26 +107,44 @@ function logInventoryResult(
 
 function logInventoryReserved(
     event: InventoryReservedEvent,
-    logger: InventoryEventLogger
+    logger: AppLogger
 ): void {
-    logger.log(
-        `[inventory-service] ` +
-        `Reserved inventory ` +
-        `for order ` +
-        `'${event.data.orderId}'`
+    logger.info(
+        "Reserved inventory",
+        {
+            eventId:
+                event.eventId,
+            orderId:
+                event.data.orderId,
+            reservationId:
+                event.data.reservationId,
+            correlationId:
+                event.correlationId,
+            itemCount:
+                event.data.items.length
+        }
     );
 }
 
 function logInventoryReservationFailed(
     event:
         InventoryReservationFailedEvent,
-    logger: InventoryEventLogger
+    logger: AppLogger
 ): void {
-    logger.log(
-        `[inventory-service] ` +
-        `Inventory reservation failed ` +
-        `for order ` +
-        `'${event.data.orderId}'`
+    logger.warn(
+        "Inventory reservation failed",
+        {
+            eventId:
+                event.eventId,
+            orderId:
+                event.data.orderId,
+            correlationId:
+                event.correlationId,
+            reason:
+                event.data.reason,
+            unavailableItems:
+                event.data.unavailableItems
+        }
     );
 }
 
