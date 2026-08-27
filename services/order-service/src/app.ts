@@ -8,7 +8,7 @@ import type {
     OrderCreatedEvent
 } from "@commerce-flow/contracts";
 import {
-    isCreateOrderRequest
+    parseCreateOrderRequest
 } from "./orderRequestValidator.js";
 import {
     OrderService
@@ -25,14 +25,19 @@ export interface OrderAppLogger {
 }
 
 export interface OrderAppDependencies {
-    readonly orderService: OrderService;
+    readonly orderService:
+    OrderService;
+
     readonly orderCreatedPublisher:
     OrderCreatedPublisher;
-    readonly logger?: OrderAppLogger;
+
+    readonly logger?:
+    OrderAppLogger;
 }
 
 export function createOrderApp(
-    dependencies: OrderAppDependencies
+    dependencies:
+        OrderAppDependencies
 ): Express {
     const {
         orderService,
@@ -63,11 +68,12 @@ export function createOrderApp(
             request: Request,
             response: Response
         ) => {
-            if (
-                !isCreateOrderRequest(
+            const validationResult =
+                parseCreateOrderRequest(
                     request.body
-                )
-            ) {
+                );
+
+            if (!validationResult.success) {
                 return response
                     .status(400)
                     .json({
@@ -82,7 +88,7 @@ export function createOrderApp(
 
             const result =
                 orderService.createOrder(
-                    request.body,
+                    validationResult.data,
                     request.header(
                         "x-correlation-id"
                     )
