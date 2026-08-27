@@ -61,7 +61,10 @@ const handleOrderCreated =
     });
 
 const app =
-    createPaymentApp();
+    createPaymentApp({
+        readinessProbe:
+            rabbitMq
+    });
 
 async function start(): Promise<void> {
     await rabbitMq.connect();

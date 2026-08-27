@@ -5,7 +5,23 @@ import type {
     Response
 } from "express";
 
-export function createPaymentApp(): Express {
+export interface ReadinessProbe {
+    isReady(): boolean;
+}
+
+export interface PaymentAppDependencies {
+    readonly readinessProbe:
+    ReadinessProbe;
+}
+
+export function createPaymentApp(
+    dependencies:
+        PaymentAppDependencies
+): Express {
+    const {
+        readinessProbe
+    } = dependencies;
+
     const app = express();
 
     app.get(
@@ -18,6 +34,38 @@ export function createPaymentApp(): Express {
                 status: "Healthy",
                 service: "payment-service"
             });
+        }
+    );
+
+    app.get(
+        "/ready",
+        (
+            _request: Request,
+            response: Response
+        ) => {
+            const rabbitMqReady =
+                readinessProbe.isReady();
+
+            const status =
+                rabbitMqReady
+                    ? "Ready"
+                    : "NotReady";
+
+            return response
+                .status(
+                    rabbitMqReady
+                        ? 200
+                        : 503
+                )
+                .json({
+                    status,
+                    service:
+                        "payment-service",
+                    dependencies: {
+                        rabbitMq:
+                            status
+                    }
+                });
         }
     );
 
