@@ -22,9 +22,11 @@ interface TestEvent {
 }
 
 const silentLogger: RabbitMqLogger = {
-    log: () => undefined,
+    info: () => undefined,
     warn: () => undefined,
-    error: () => undefined
+    error: () => undefined,
+    child: () =>
+        silentLogger
 };
 
 test(
@@ -556,6 +558,133 @@ test(
     }
 );
 
+test(
+    "logs published events with structured context",
+    async () => {
+        const channel =
+            new FakeChannel();
+
+        const connection =
+            new FakeConnection(
+                channel
+            );
+
+        const logger =
+            new RecordingRabbitMqLogger();
+
+        const client =
+            createClient(
+                connection,
+                {},
+                {
+                    logger
+                }
+            );
+
+        await client.publish(
+            "test.event",
+            createTestEvent()
+        );
+
+        const publishLog =
+            logger.infoLogs.find(
+                entry =>
+                    entry.message ===
+                    "Published event"
+            );
+
+        assert.deepEqual(
+            publishLog,
+            {
+                message:
+                    "Published event",
+                context: {
+                    exchangeName:
+                        "commerce.events",
+                    routingKey:
+                        "test.event",
+                    eventId:
+                        "event-001",
+                    correlationId:
+                        "correlation-001"
+                }
+            }
+        );
+    }
+);
+
+test(
+    "logs handler failures with structured error context",
+    async () => {
+        const channel =
+            new FakeChannel();
+
+        const connection =
+            new FakeConnection(
+                channel
+            );
+
+        const logger =
+            new RecordingRabbitMqLogger();
+
+        const client =
+            createClient(
+                connection,
+                {},
+                {
+                    logger
+                }
+            );
+
+        const handlerError =
+            new Error(
+                "Handler failed"
+            );
+
+        await client.subscribe<TestEvent>(
+            "test-service.test-events",
+            [
+                "test.event"
+            ],
+            async () => {
+                throw handlerError;
+            }
+        );
+
+        const consume =
+            getSingleConsumer(
+                channel
+            );
+
+        await consume(
+            createMessage(
+                createTestEvent()
+            )
+        );
+
+        assert.equal(
+            logger.errorLogs.length,
+            1
+        );
+
+        assert.deepEqual(
+            logger.errorLogs[0],
+            {
+                message:
+                    "Failed to process message",
+                error:
+                    handlerError,
+                context: {
+                    queueName:
+                        "test-service.test-events",
+                    deadLetterQueueName:
+                        "test-service.test-events" +
+                        ".dead-letter"
+                }
+            }
+        );
+    }
+);
 function createClient(
     connection: RabbitMqConnection,
     options:
@@ -621,6 +750,83 @@ function getSingleConsumer(
     return consumeCall.onMessage;
 }
 
+class RecordingRabbitMqLogger
+    implements RabbitMqLogger {
+    readonly infoLogs: {
+        message: string;
+        context?:
+            Readonly<
+                Record<string, unknown>
+            >;
+    }[] = [];
+
+    readonly warningLogs: {
+        message: string;
+        context?:
+            Readonly<
+                Record<string, unknown>
+            >;
+    }[] = [];
+
+    readonly errorLogs: {
+        message: string;
+        error?: unknown;
+        context?:
+            Readonly<
+                Record<string, unknown>
+            >;
+    }[] = [];
+
+    info(
+        message: string,
+        context?:
+            Readonly<
+                Record<string, unknown>
+            >
+    ): void {
+        this.infoLogs.push({
+            message,
+            context
+        });
+    }
+
+    warn(
+        message: string,
+        context?:
+            Readonly<
+                Record<string, unknown>
+            >
+    ): void {
+        this.warningLogs.push({
+            message,
+            context
+        });
+    }
+
+    error(
+        message: string,
+        error?: unknown,
+        context?:
+            Readonly<
+                Record<string, unknown>
+            >
+    ): void {
+        this.errorLogs.push({
+            message,
+            error,
+            context
+        });
+    }
+
+    child(
+        _context:
+            Readonly<
+                Record<string, unknown>
+            >
+    ): RabbitMqLogger {
+        return this;
+    }
+}
 class FakeConnection
     implements RabbitMqConnection {
     createChannelCalls = 0;

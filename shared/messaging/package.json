@@ -18,6 +18,7 @@
         "test:integration": "node --import tsx --test tests/integration/rabbitMqClient.integration.test.ts"
     },
     "dependencies": {
+        "@commerce-flow/logging": "file:../logging",
         "amqplib": "^0.10.5"
     }
 }

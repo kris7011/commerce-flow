@@ -1,5 +1,9 @@
 import * as amqp from "amqplib";
 import type { ConsumeMessage } from "amqplib";
+import {
+    createStructuredLogger,
+    type AppLogger
+} from "@commerce-flow/logging";
 
 export interface RabbitMqConnection {
     createChannel(): Promise<RabbitMqChannel>;
@@ -59,14 +63,8 @@ export interface RabbitMqChannel {
     close(): Promise<void>;
 }
 
-export interface RabbitMqLogger {
-    log(message: string): void;
-    warn(message: string): void;
-    error(
-        message: string,
-        error?: unknown
-    ): void;
-}
+export type RabbitMqLogger =
+    AppLogger;
 
 export interface RabbitMqClientOptions {
     maxConnectionRetries?: number;
@@ -125,7 +123,9 @@ export class RabbitMqClient {
 
         this.logger =
             dependencies.logger ??
-            console;
+            createStructuredLogger(
+                "messaging"
+            );
     }
 
     async connect(): Promise<void> {
@@ -166,10 +166,12 @@ export class RabbitMqClient {
                     }
                 );
 
-                this.logger.log(
-                    `[messaging] Connected to ` +
-                    `RabbitMQ exchange ` +
-                    `${this.exchangeName}`
+                this.logger.info(
+                    "Connected to RabbitMQ exchange",
+                    {
+                        exchangeName:
+                            this.exchangeName
+                    }
                 );
 
                 return;
@@ -177,12 +179,15 @@ export class RabbitMqClient {
                 lastError = error;
 
                 this.logger.warn(
-                    `[messaging] RabbitMQ ` +
-                    `connection attempt ` +
-                    `${attempt}/` +
-                    `${maxConnectionRetries} ` +
-                    `failed: ` +
-                    `${getErrorMessage(error)}`
+                    "RabbitMQ connection attempt failed",
+                    {
+                        attempt,
+                        maxConnectionRetries,
+                        errorMessage:
+                            getErrorMessage(
+                                error
+                            )
+                    }
                 );
 
                 await this.close();
@@ -237,12 +242,17 @@ export class RabbitMqClient {
             }
         );
 
-        this.logger.log(
-            `[messaging] Published event ` +
-            `with routing key ` +
-            `'${routingKey}' and ` +
-            `correlationId ` +
-            `'${event.correlationId}'`
+        this.logger.info(
+            "Published event",
+            {
+                exchangeName:
+                    this.exchangeName,
+                routingKey,
+                eventId:
+                    event.eventId,
+                correlationId:
+                    event.correlationId
+            }
         );
     }
 
@@ -337,12 +347,15 @@ export class RabbitMqClient {
                         )
                     ) {
                         this.logger.warn(
-                            `[messaging] Duplicate ` +
-                            `event '${eventId}' ` +
-                            `received on queue ` +
-                            `'${queueName}'. ` +
-                            `Acknowledging without ` +
-                            `reprocessing.`
+                            "Duplicate event received",
+                            {
+                                eventId,
+                                queueName,
+                                correlationId:
+                                    event.correlationId,
+                                action:
+                                    "acknowledge-without-reprocessing"
+                            }
                         );
 
                         this.channel?.ack(
@@ -367,13 +380,12 @@ export class RabbitMqClient {
                     );
                 } catch (error) {
                     this.logger.error(
-                        `[messaging] Failed to ` +
-                        `process message from queue ` +
-                        `'${queueName}'. ` +
-                        `Moving message to ` +
-                        `dead-letter queue ` +
-                        `'${deadLetterQueueName}'.`,
-                        error
+                        "Failed to process message",
+                        error,
+                        {
+                            queueName,
+                            deadLetterQueueName
+                        }
                     );
 
                     this.channel?.nack(
@@ -385,17 +397,22 @@ export class RabbitMqClient {
             }
         );
 
-        this.logger.log(
-            `[messaging] Subscribed queue ` +
-            `'${queueName}' to routing keys: ` +
-            `${routingKeys.join(", ")}`
+        this.logger.info(
+            "Subscribed queue",
+            {
+                queueName,
+                routingKeys
+            }
         );
 
-        this.logger.log(
-            `[messaging] Dead-letter queue ` +
-            `'${deadLetterQueueName}' ` +
-            `configured for queue ` +
-            `'${queueName}'`
+        this.logger.info(
+            "Configured dead-letter queue",
+            {
+                queueName,
+                deadLetterQueueName,
+                deadLetterExchangeName,
+                deadLetterRoutingKey
+            }
         );
     }
 
