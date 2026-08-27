@@ -48,7 +48,9 @@ const handleNotificationEvent =
 const app =
     createNotificationApp({
         notificationReader:
-            notificationService
+            notificationService,
+        readinessProbe:
+            rabbitMq
     });
 
 async function start(): Promise<void> {
