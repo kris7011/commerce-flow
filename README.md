@@ -715,6 +715,7 @@ Business behaviour remains inside the individual services.
 
 * Express
 * JSON over HTTP
+* Zod 4 runtime request validation
 
 ### Messaging
 
@@ -1132,7 +1133,7 @@ All five services and the shared messaging client include unit and component tes
 | Workspace            |  Tests | Covered behaviour                                                                                                                               |
 | -------------------- | -----: | ----------------------------------------------------------------------------------------------------------------------------------------------- |
 | Messaging            |      9 | Connection retry, publishing, queue topology, dead-letter routing, acknowledgements, duplicate handling and reconnecting                        |
-| Order Service        |     10 | Request validation, correlation identifiers, totals, event creation, HTTP endpoints and publishing through an injected publisher                |
+| Order Service        |     10 | Zod request validation, correlation identifiers, totals, event creation, HTTP endpoints and publishing through an injected publisher             |
 | Payment Service      |      6 | Payment event creation, data preservation, health endpoint, event coordination and publisher failure propagation                                |
 | Inventory Service    |      9 | Reservation rules, health and stock endpoints, successful and failed event coordination, logging and publisher failure propagation              |
 | Delivery Service     |      7 | Delivery creation, date calculation, health endpoint, event coordination, workflow identifiers and publisher failure propagation                |
@@ -1627,10 +1628,10 @@ A deployed environment should include:
 * [x] GitHub Actions validation
 * [x] Node.js 20 and 22 CI matrix
 * [x] Dependency vulnerability remediation
+* [x] Runtime request validation with Zod
 
 ### Next improvements
 
-* [ ] Add request validation library
 * [ ] Add structured logging
 * [ ] Add dependency-aware readiness endpoints
 * [ ] Add persistent inventory storage
@@ -1934,7 +1935,9 @@ Unit, integration and end-to-end tests run automatically in GitHub Actions on No
 
 All five services now separate HTTP application construction from process startup. Event-consuming services also isolate their message coordination in dedicated, dependency-injected handler modules.
 
-Future iterations will focus on durable persistence, observability, stronger delivery guarantees and production-oriented recovery patterns.
+The Order Service validates incoming `POST /orders` payloads at runtime with a Zod schema before passing typed data into the business service.
+
+Future iterations will focus on structured logging, dependency-aware readiness checks, durable persistence, observability and stronger delivery guarantees.
 
 ---
 
