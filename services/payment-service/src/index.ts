@@ -2,6 +2,9 @@ import type {
     OrderCreatedEvent
 } from "@commerce-flow/contracts";
 import {
+    createStructuredLogger
+} from "@commerce-flow/logging";
+import {
     RabbitMqClient
 } from "@commerce-flow/messaging";
 import {
@@ -24,6 +27,11 @@ const port =
 const rabbitMqUrl =
     process.env.RABBITMQ_URL ??
     "amqp://guest:guest@localhost:5672";
+
+const logger =
+    createStructuredLogger(
+        "payment-service"
+    );
 
 const rabbitMq =
     new RabbitMqClient(
@@ -48,7 +56,8 @@ const paymentAuthorizedPublisher:
 const handleOrderCreated =
     createOrderCreatedHandler({
         paymentService,
-        paymentAuthorizedPublisher
+        paymentAuthorizedPublisher,
+        logger
     });
 
 const app =
@@ -68,19 +77,23 @@ async function start(): Promise<void> {
     app.listen(
         port,
         () => {
-            console.log(
-                `[payment-service] ` +
-                `Listening on port ${port}`
+            logger.info(
+                "Service listening",
+                {
+                    port
+                }
             );
         }
     );
 }
 
 start().catch(error => {
-    console.error(
-        "[payment-service] " +
+    logger.error(
         "Failed to start service",
-        error
+        error,
+        {
+            port
+        }
     );
 
     process.exit(1);
@@ -89,6 +102,10 @@ start().catch(error => {
 process.on(
     "SIGINT",
     async () => {
+        logger.info(
+            "Service shutting down"
+        );
+
         await rabbitMq.close();
 
         process.exit(0);

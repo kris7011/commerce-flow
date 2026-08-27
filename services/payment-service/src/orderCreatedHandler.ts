@@ -2,6 +2,9 @@ import type {
     OrderCreatedEvent,
     PaymentAuthorizedEvent
 } from "@commerce-flow/contracts";
+import type {
+    AppLogger
+} from "@commerce-flow/logging";
 import {
     PaymentService
 } from "./paymentService.js";
@@ -12,10 +15,6 @@ export interface PaymentAuthorizedPublisher {
     ): Promise<void>;
 }
 
-export interface PaymentEventLogger {
-    log(message: string): void;
-}
-
 export interface OrderCreatedHandlerDependencies {
     readonly paymentService:
     PaymentService;
@@ -23,8 +22,8 @@ export interface OrderCreatedHandlerDependencies {
     readonly paymentAuthorizedPublisher:
     PaymentAuthorizedPublisher;
 
-    readonly logger?:
-    PaymentEventLogger;
+    readonly logger:
+    AppLogger;
 }
 
 export type OrderCreatedHandler = (
@@ -38,19 +37,26 @@ export function createOrderCreatedHandler(
     const {
         paymentService,
         paymentAuthorizedPublisher,
-        logger = console
+        logger
     } = dependencies;
 
     return async (
         event: OrderCreatedEvent
     ): Promise<void> => {
-        logger.log(
-            `[payment-service] ` +
-            `Received OrderCreated ` +
-            `for order ` +
-            `'${event.data.orderId}' ` +
-            `with correlationId ` +
-            `'${event.correlationId}'`
+        logger.info(
+            "Received OrderCreated",
+            {
+                eventId:
+                    event.eventId,
+                orderId:
+                    event.data.orderId,
+                correlationId:
+                    event.correlationId,
+                totalAmount:
+                    event.data.totalAmount,
+                itemCount:
+                    event.data.items.length
+            }
         );
 
         const paymentAuthorizedEvent =
@@ -62,11 +68,25 @@ export function createOrderCreatedHandler(
                 paymentAuthorizedEvent
             );
 
-        logger.log(
-            `[payment-service] ` +
-            `Authorized payment ` +
-            `for order ` +
-            `'${event.data.orderId}'`
+        logger.info(
+            "Authorized payment",
+            {
+                eventId:
+                    paymentAuthorizedEvent
+                        .eventId,
+                orderId:
+                    paymentAuthorizedEvent
+                        .data.orderId,
+                paymentId:
+                    paymentAuthorizedEvent
+                        .data.paymentId,
+                correlationId:
+                    paymentAuthorizedEvent
+                        .correlationId,
+                amount:
+                    paymentAuthorizedEvent
+                        .data.amount
+            }
         );
     };
 }
