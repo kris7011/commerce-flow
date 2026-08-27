@@ -21,50 +21,73 @@ interface TestEvent {
     };
 }
 
-const silentLogger: RabbitMqLogger = {
-    info: () => undefined,
-    warn: () => undefined,
-    error: () => undefined,
-    child: () =>
-        silentLogger
+const silentLogger:
+    RabbitMqLogger = {
+    info:
+        () => undefined,
+
+    warn:
+        () => undefined,
+
+    error:
+        () => undefined,
+
+    child:
+        () =>
+            silentLogger
 };
 
 test(
     "connects and declares the durable topic exchange only once",
     async () => {
-        const channel = new FakeChannel();
+        const channel =
+            new FakeChannel();
+
         const connection =
-            new FakeConnection(channel);
+            new FakeConnection(
+                channel
+            );
 
         let connectCalls = 0;
 
-        const client = createClient(
-            connection,
-            {},
-            {
-                connect: async () => {
-                    connectCalls += 1;
-                    return connection;
+        const client =
+            createClient(
+                connection,
+                {},
+                {
+                    connect:
+                        async () => {
+                            connectCalls +=
+                                1;
+
+                            return connection;
+                        }
                 }
-            }
+            );
+
+        await client.connect();
+        await client.connect();
+
+        assert.equal(
+            connectCalls,
+            1
         );
 
-        await client.connect();
-        await client.connect();
-
-        assert.equal(connectCalls, 1);
         assert.equal(
-            connection.createChannelCalls,
+            connection
+                .createChannelCalls,
             1
         );
 
         assert.deepEqual(
-            channel.assertExchangeCalls,
+            channel
+                .assertExchangeCalls,
             [
                 {
                     exchangeName:
                         "commerce.events",
-                    exchangeType: "topic",
+                    exchangeType:
+                        "topic",
                     options: {
                         durable: true
                     }
@@ -75,44 +98,163 @@ test(
 );
 
 test(
+    "reports readiness across the connection lifecycle",
+    async () => {
+        const channel =
+            new FakeChannel();
+
+        const connection =
+            new FakeConnection(
+                channel
+            );
+
+        const client =
+            createClient(
+                connection
+            );
+
+        assert.equal(
+            client.isReady(),
+            false
+        );
+
+        await client.connect();
+
+        assert.equal(
+            client.isReady(),
+            true
+        );
+
+        await client.close();
+
+        assert.equal(
+            client.isReady(),
+            false
+        );
+    }
+);
+
+test(
+    "becomes unready when the RabbitMQ connection closes",
+    async () => {
+        const channel =
+            new FakeChannel();
+
+        const connection =
+            new FakeConnection(
+                channel
+            );
+
+        const client =
+            createClient(
+                connection
+            );
+
+        await client.connect();
+
+        assert.equal(
+            client.isReady(),
+            true
+        );
+
+        connection
+            .triggerClose();
+
+        assert.equal(
+            client.isReady(),
+            false
+        );
+    }
+);
+
+test(
+    "becomes unready when the RabbitMQ channel closes",
+    async () => {
+        const channel =
+            new FakeChannel();
+
+        const connection =
+            new FakeConnection(
+                channel
+            );
+
+        const client =
+            createClient(
+                connection
+            );
+
+        await client.connect();
+
+        assert.equal(
+            client.isReady(),
+            true
+        );
+
+        channel.triggerClose();
+
+        assert.equal(
+            client.isReady(),
+            false
+        );
+    }
+);
+
+test(
     "retries failed connections using the configured delay",
     async () => {
-        const channel = new FakeChannel();
+        const channel =
+            new FakeChannel();
+
         const connection =
-            new FakeConnection(channel);
+            new FakeConnection(
+                channel
+            );
 
-        let connectionAttempts = 0;
-        const delays: number[] = [];
+        let connectionAttempts =
+            0;
 
-        const client = new RabbitMqClient(
-            "amqp://test",
-            "commerce.events",
-            {
-                maxConnectionRetries: 3,
-                retryDelayInMs: 25
-            },
-            {
-                connect: async () => {
-                    connectionAttempts += 1;
+        const delays:
+            number[] = [];
 
-                    if (
-                        connectionAttempts < 3
-                    ) {
-                        throw new Error(
-                            "Broker unavailable"
-                        );
-                    }
-
-                    return connection;
+        const client =
+            new RabbitMqClient(
+                "amqp://test",
+                "commerce.events",
+                {
+                    maxConnectionRetries:
+                        3,
+                    retryDelayInMs:
+                        25
                 },
+                {
+                    connect:
+                        async () => {
+                            connectionAttempts +=
+                                1;
 
-                sleep: async milliseconds => {
-                    delays.push(milliseconds);
-                },
+                            if (
+                                connectionAttempts <
+                                3
+                            ) {
+                                throw new Error(
+                                    "Broker unavailable"
+                                );
+                            }
 
-                logger: silentLogger
-            }
-        );
+                            return connection;
+                        },
+
+                    sleep:
+                        async milliseconds => {
+                            delays.push(
+                                milliseconds
+                            );
+                        },
+
+                    logger:
+                        silentLogger
+                }
+            );
 
         await client.connect();
 
@@ -123,7 +265,10 @@ test(
 
         assert.deepEqual(
             delays,
-            [25, 25]
+            [
+                25,
+                25
+            ]
         );
     }
 );
@@ -131,36 +276,49 @@ test(
 test(
     "throws after all connection attempts fail",
     async () => {
-        let connectionAttempts = 0;
-        const delays: number[] = [];
+        let connectionAttempts =
+            0;
 
-        const client = new RabbitMqClient(
-            "amqp://test",
-            "commerce.events",
-            {
-                maxConnectionRetries: 2,
-                retryDelayInMs: 10
-            },
-            {
-                connect: async () => {
-                    connectionAttempts += 1;
+        const delays:
+            number[] = [];
 
-                    throw new Error(
-                        "Broker unavailable"
-                    );
+        const client =
+            new RabbitMqClient(
+                "amqp://test",
+                "commerce.events",
+                {
+                    maxConnectionRetries:
+                        2,
+                    retryDelayInMs:
+                        10
                 },
+                {
+                    connect:
+                        async () => {
+                            connectionAttempts +=
+                                1;
 
-                sleep: async milliseconds => {
-                    delays.push(milliseconds);
-                },
+                            throw new Error(
+                                "Broker unavailable"
+                            );
+                        },
 
-                logger: silentLogger
-            }
-        );
+                    sleep:
+                        async milliseconds => {
+                            delays.push(
+                                milliseconds
+                            );
+                        },
+
+                    logger:
+                        silentLogger
+                }
+            );
 
         await assert.rejects(
             async () => {
-                await client.connect();
+                await client
+                    .connect();
             },
             {
                 message:
@@ -178,7 +336,9 @@ test(
 
         assert.deepEqual(
             delays,
-            [10]
+            [
+                10
+            ]
         );
     }
 );
@@ -186,14 +346,21 @@ test(
 test(
     "publishes serialized events with persistent message metadata",
     async () => {
-        const channel = new FakeChannel();
+        const channel =
+            new FakeChannel();
+
         const connection =
-            new FakeConnection(channel);
+            new FakeConnection(
+                channel
+            );
 
         const client =
-            createClient(connection);
+            createClient(
+                connection
+            );
 
-        const event = createTestEvent();
+        const event =
+            createTestEvent();
 
         await client.publish(
             "test.event",
@@ -201,28 +368,37 @@ test(
         );
 
         assert.equal(
-            channel.publishCalls.length,
+            channel
+                .publishCalls
+                .length,
             1
         );
 
         const publishCall =
-            channel.publishCalls[0];
+            channel
+                .publishCalls[0];
 
-        assert.ok(publishCall);
+        assert.ok(
+            publishCall
+        );
 
         assert.equal(
-            publishCall.exchangeName,
+            publishCall
+                .exchangeName,
             "commerce.events"
         );
 
         assert.equal(
-            publishCall.routingKey,
+            publishCall
+                .routingKey,
             "test.event"
         );
 
         assert.deepEqual(
             JSON.parse(
-                publishCall.content.toString()
+                publishCall
+                    .content
+                    .toString()
             ),
             event
         );
@@ -232,8 +408,10 @@ test(
             {
                 contentType:
                     "application/json",
-                deliveryMode: 2,
-                messageId: "event-001",
+                deliveryMode:
+                    2,
+                messageId:
+                    "event-001",
                 correlationId:
                     "correlation-001"
             }
@@ -244,60 +422,76 @@ test(
 test(
     "configures durable queues and dead-letter routing",
     async () => {
-        const channel = new FakeChannel();
+        const channel =
+            new FakeChannel();
+
         const connection =
-            new FakeConnection(channel);
+            new FakeConnection(
+                channel
+            );
 
         const client =
-            createClient(connection);
+            createClient(
+                connection
+            );
 
-        await client.subscribe<TestEvent>(
-            "test-service.test-events",
-            [
-                "test.created",
-                "test.updated"
-            ],
-            async () => undefined
-        );
+        await client
+            .subscribe<TestEvent>(
+                "test-service.test-events",
+                [
+                    "test.created",
+                    "test.updated"
+                ],
+                async () =>
+                    undefined
+            );
 
         assert.deepEqual(
-            channel.assertExchangeCalls,
+            channel
+                .assertExchangeCalls,
             [
                 {
                     exchangeName:
                         "commerce.events",
-                    exchangeType: "topic",
+                    exchangeType:
+                        "topic",
                     options: {
-                        durable: true
+                        durable:
+                            true
                     }
                 },
                 {
                     exchangeName:
                         "commerce.events.dead-letter",
-                    exchangeType: "topic",
+                    exchangeType:
+                        "topic",
                     options: {
-                        durable: true
+                        durable:
+                            true
                     }
                 }
             ]
         );
 
         assert.deepEqual(
-            channel.assertQueueCalls,
+            channel
+                .assertQueueCalls,
             [
                 {
                     queueName:
                         "test-service.test-events" +
                         ".dead-letter",
                     options: {
-                        durable: true
+                        durable:
+                            true
                     }
                 },
                 {
                     queueName:
                         "test-service.test-events",
                     options: {
-                        durable: true,
+                        durable:
+                            true,
                         arguments: {
                             "x-dead-letter-exchange":
                                 "commerce.events" +
@@ -313,7 +507,8 @@ test(
         );
 
         assert.deepEqual(
-            channel.bindQueueCalls,
+            channel
+                .bindQueueCalls,
             [
                 {
                     queueName:
@@ -346,12 +541,15 @@ test(
         );
 
         assert.equal(
-            channel.consumeCalls.length,
+            channel
+                .consumeCalls
+                .length,
             1
         );
 
         assert.equal(
-            channel.consumeCalls[0]
+            channel
+                .consumeCalls[0]
                 ?.queueName,
             "test-service.test-events"
         );
@@ -361,26 +559,39 @@ test(
 test(
     "acknowledges successful messages and skips duplicate events",
     async () => {
-        const channel = new FakeChannel();
+        const channel =
+            new FakeChannel();
+
         const connection =
-            new FakeConnection(channel);
+            new FakeConnection(
+                channel
+            );
 
         const client =
-            createClient(connection);
+            createClient(
+                connection
+            );
 
         const handledEvents:
             TestEvent[] = [];
 
-        await client.subscribe<TestEvent>(
-            "test-service.test-events",
-            ["test.event"],
-            async event => {
-                handledEvents.push(event);
-            }
-        );
+        await client
+            .subscribe<TestEvent>(
+                "test-service.test-events",
+                [
+                    "test.event"
+                ],
+                async event => {
+                    handledEvents.push(
+                        event
+                    );
+                }
+            );
 
         const consume =
-            getSingleConsumer(channel);
+            getSingleConsumer(
+                channel
+            );
 
         const firstMessage =
             createMessage(
@@ -392,8 +603,13 @@ test(
                 createTestEvent()
             );
 
-        await consume(firstMessage);
-        await consume(duplicateMessage);
+        await consume(
+            firstMessage
+        );
+
+        await consume(
+            duplicateMessage
+        );
 
         assert.equal(
             handledEvents.length,
@@ -406,7 +622,8 @@ test(
         );
 
         assert.deepEqual(
-            channel.acknowledgedMessages,
+            channel
+                .acknowledgedMessages,
             [
                 firstMessage,
                 duplicateMessage
@@ -414,7 +631,9 @@ test(
         );
 
         assert.equal(
-            channel.nackedMessages.length,
+            channel
+                .nackedMessages
+                .length,
             0
         );
     }
@@ -423,46 +642,63 @@ test(
 test(
     "nacks messages without requeueing when the handler fails",
     async () => {
-        const channel = new FakeChannel();
+        const channel =
+            new FakeChannel();
+
         const connection =
-            new FakeConnection(channel);
+            new FakeConnection(
+                channel
+            );
 
         const client =
-            createClient(connection);
+            createClient(
+                connection
+            );
 
-        await client.subscribe<TestEvent>(
-            "test-service.test-events",
-            ["test.event"],
-            async () => {
-                throw new Error(
-                    "Handler failed"
-                );
-            }
-        );
+        await client
+            .subscribe<TestEvent>(
+                "test-service.test-events",
+                [
+                    "test.event"
+                ],
+                async () => {
+                    throw new Error(
+                        "Handler failed"
+                    );
+                }
+            );
 
         const consume =
-            getSingleConsumer(channel);
+            getSingleConsumer(
+                channel
+            );
 
         const message =
             createMessage(
                 createTestEvent()
             );
 
-        await consume(message);
+        await consume(
+            message
+        );
 
         assert.equal(
-            channel.acknowledgedMessages
+            channel
+                .acknowledgedMessages
                 .length,
             0
         );
 
         assert.deepEqual(
-            channel.nackedMessages,
+            channel
+                .nackedMessages,
             [
                 {
                     message,
-                    allUpTo: false,
-                    requeue: false
+                    allUpTo:
+                        false,
+                    requeue:
+                        false
                 }
             ]
         );
@@ -472,43 +708,65 @@ test(
 test(
     "nacks messages that do not contain a valid event id",
     async () => {
-        const channel = new FakeChannel();
+        const channel =
+            new FakeChannel();
+
         const connection =
-            new FakeConnection(channel);
+            new FakeConnection(
+                channel
+            );
 
         const client =
-            createClient(connection);
+            createClient(
+                connection
+            );
 
-        let handlerCalls = 0;
+        let handlerCalls =
+            0;
 
-        await client.subscribe<TestEvent>(
-            "test-service.test-events",
-            ["test.event"],
-            async () => {
-                handlerCalls += 1;
-            }
-        );
+        await client
+            .subscribe<TestEvent>(
+                "test-service.test-events",
+                [
+                    "test.event"
+                ],
+                async () => {
+                    handlerCalls +=
+                        1;
+                }
+            );
 
         const consume =
-            getSingleConsumer(channel);
+            getSingleConsumer(
+                channel
+            );
 
-        const message = createMessage({
-            eventId: "",
-            correlationId:
-                "correlation-001"
-        });
+        const message =
+            createMessage({
+                eventId: "",
+                correlationId:
+                    "correlation-001"
+            });
 
-        await consume(message);
+        await consume(
+            message
+        );
 
-        assert.equal(handlerCalls, 0);
+        assert.equal(
+            handlerCalls,
+            0
+        );
 
         assert.deepEqual(
-            channel.nackedMessages,
+            channel
+                .nackedMessages,
             [
                 {
                     message,
-                    allUpTo: false,
-                    requeue: false
+                    allUpTo:
+                        false,
+                    requeue:
+                        false
                 }
             ]
         );
@@ -518,41 +776,56 @@ test(
 test(
     "closes resources and allows a later reconnect",
     async () => {
-        const channel = new FakeChannel();
+        const channel =
+            new FakeChannel();
+
         const connection =
-            new FakeConnection(channel);
+            new FakeConnection(
+                channel
+            );
 
-        let connectCalls = 0;
+        let connectCalls =
+            0;
 
-        const client = createClient(
-            connection,
-            {},
-            {
-                connect: async () => {
-                    connectCalls += 1;
-                    return connection;
+        const client =
+            createClient(
+                connection,
+                {},
+                {
+                    connect:
+                        async () => {
+                            connectCalls +=
+                                1;
+
+                            return connection;
+                        }
                 }
-            }
-        );
+            );
 
         await client.connect();
         await client.close();
         await client.connect();
 
-        assert.equal(connectCalls, 2);
-
         assert.equal(
-            connection.createChannelCalls,
+            connectCalls,
             2
         );
 
         assert.equal(
-            connection.closeCalls,
+            connection
+                .createChannelCalls,
+            2
+        );
+
+        assert.equal(
+            connection
+                .closeCalls,
             1
         );
 
         assert.equal(
-            channel.closeCalls,
+            channel
+                .closeCalls,
             1
         );
     }
@@ -641,15 +914,16 @@ test(
                 "Handler failed"
             );
 
-        await client.subscribe<TestEvent>(
-            "test-service.test-events",
-            [
-                "test.event"
-            ],
-            async () => {
-                throw handlerError;
-            }
-        );
+        await client
+            .subscribe<TestEvent>(
+                "test-service.test-events",
+                [
+                    "test.event"
+                ],
+                async () => {
+                    throw handlerError;
+                }
+            );
 
         const consume =
             getSingleConsumer(
@@ -663,7 +937,9 @@ test(
         );
 
         assert.equal(
-            logger.errorLogs.length,
+            logger
+                .errorLogs
+                .length,
             1
         );
 
@@ -685,39 +961,50 @@ test(
         );
     }
 );
+
 function createClient(
-    connection: RabbitMqConnection,
+    connection:
+        RabbitMqConnection,
     options:
         RabbitMqClientOptions = {},
     dependencies:
-        Partial<RabbitMqClientDependencies> = {}
+        Partial<
+            RabbitMqClientDependencies
+        > = {}
 ): RabbitMqClient {
     return new RabbitMqClient(
         "amqp://test",
         "commerce.events",
         options,
         {
-            connect: async () =>
-                connection,
+            connect:
+                async () =>
+                    connection,
 
-            sleep: async () =>
-                undefined,
+            sleep:
+                async () =>
+                    undefined,
 
-            logger: silentLogger,
+            logger:
+                silentLogger,
 
             ...dependencies
         }
     );
 }
 
-function createTestEvent(): TestEvent {
+function createTestEvent():
+    TestEvent {
     return {
-        eventId: "event-001",
-        eventType: "TestEvent",
+        eventId:
+            "event-001",
+        eventType:
+            "TestEvent",
         correlationId:
             "correlation-001",
         data: {
-            value: "test-value"
+            value:
+                "test-value"
         }
     };
 }
@@ -726,28 +1013,39 @@ function createMessage(
     body: unknown
 ): ConsumeMessage {
     return {
-        content: Buffer.from(
-            JSON.stringify(body)
-        )
+        content:
+            Buffer.from(
+                JSON.stringify(
+                    body
+                )
+            )
     } as ConsumeMessage;
 }
 
 function getSingleConsumer(
-    channel: FakeChannel
+    channel:
+        FakeChannel
 ): (
-    message: ConsumeMessage | null
+    message:
+        ConsumeMessage | null
 ) => void | Promise<void> {
     assert.equal(
-        channel.consumeCalls.length,
+        channel
+            .consumeCalls
+            .length,
         1
     );
 
     const consumeCall =
-        channel.consumeCalls[0];
+        channel
+            .consumeCalls[0];
 
-    assert.ok(consumeCall);
+    assert.ok(
+        consumeCall
+    );
 
-    return consumeCall.onMessage;
+    return consumeCall
+        .onMessage;
 }
 
 class RecordingRabbitMqLogger
@@ -755,33 +1053,45 @@ class RecordingRabbitMqLogger
     readonly infoLogs: {
         message: string;
         context?:
-            Readonly<
-                Record<string, unknown>
-            >;
+        Readonly<
+            Record<
+                string,
+                unknown
+            >
+        >;
     }[] = [];
 
     readonly warningLogs: {
         message: string;
         context?:
-            Readonly<
-                Record<string, unknown>
-            >;
+        Readonly<
+            Record<
+                string,
+                unknown
+            >
+        >;
     }[] = [];
 
     readonly errorLogs: {
         message: string;
         error?: unknown;
         context?:
-            Readonly<
-                Record<string, unknown>
-            >;
+        Readonly<
+            Record<
+                string,
+                unknown
+            >
+        >;
     }[] = [];
 
     info(
         message: string,
         context?:
             Readonly<
-                Record<string, unknown>
+                Record<
+                    string,
+                    unknown
+                >
             >
     ): void {
         this.infoLogs.push({
@@ -794,7 +1104,10 @@ class RecordingRabbitMqLogger
         message: string,
         context?:
             Readonly<
-                Record<string, unknown>
+                Record<
+                    string,
+                    unknown
+                >
             >
     ): void {
         this.warningLogs.push({
@@ -808,7 +1121,10 @@ class RecordingRabbitMqLogger
         error?: unknown,
         context?:
             Readonly<
-                Record<string, unknown>
+                Record<
+                    string,
+                    unknown
+                >
             >
     ): void {
         this.errorLogs.push({
@@ -821,31 +1137,59 @@ class RecordingRabbitMqLogger
     child(
         _context:
             Readonly<
-                Record<string, unknown>
+                Record<
+                    string,
+                    unknown
+                >
             >
     ): RabbitMqLogger {
         return this;
     }
 }
+
 class FakeConnection
     implements RabbitMqConnection {
     createChannelCalls = 0;
     closeCalls = 0;
 
+    private readonly closeHandlers:
+        (() => void)[] = [];
+
     constructor(
         private readonly channel:
             RabbitMqChannel
-    ) { }
+    ) {
+    }
 
     async createChannel():
         Promise<RabbitMqChannel> {
-        this.createChannelCalls += 1;
+        this.createChannelCalls +=
+            1;
 
         return this.channel;
     }
 
-    async close(): Promise<void> {
-        this.closeCalls += 1;
+    onClose(
+        handler: () => void
+    ): void {
+        this.closeHandlers.push(
+            handler
+        );
+    }
+
+    triggerClose(): void {
+        for (
+            const handler
+            of this.closeHandlers
+        ) {
+            handler();
+        }
+    }
+
+    async close():
+        Promise<void> {
+        this.closeCalls +=
+            1;
     }
 }
 
@@ -864,7 +1208,10 @@ class FakeChannel
         options: {
             durable: boolean;
             arguments?:
-            Record<string, unknown>;
+            Record<
+                string,
+                unknown
+            >;
         };
     }[] = [];
 
@@ -898,12 +1245,18 @@ class FakeChannel
         ConsumeMessage[] = [];
 
     readonly nackedMessages: {
-        message: ConsumeMessage;
-        allUpTo: boolean | undefined;
-        requeue: boolean | undefined;
+        message:
+        ConsumeMessage;
+        allUpTo:
+        boolean | undefined;
+        requeue:
+        boolean | undefined;
     }[] = [];
 
     closeCalls = 0;
+
+    private readonly closeHandlers:
+        (() => void)[] = [];
 
     async assertExchange(
         exchangeName: string,
@@ -912,11 +1265,13 @@ class FakeChannel
             durable: boolean;
         }
     ): Promise<unknown> {
-        this.assertExchangeCalls.push({
-            exchangeName,
-            exchangeType,
-            options
-        });
+        this
+            .assertExchangeCalls
+            .push({
+                exchangeName,
+                exchangeType,
+                options
+            });
 
         return {};
     }
@@ -926,13 +1281,18 @@ class FakeChannel
         options: {
             durable: boolean;
             arguments?:
-            Record<string, unknown>;
+            Record<
+                string,
+                unknown
+            >;
         }
     ): Promise<unknown> {
-        this.assertQueueCalls.push({
-            queueName,
-            options
-        });
+        this
+            .assertQueueCalls
+            .push({
+                queueName,
+                options
+            });
 
         return {};
     }
@@ -942,11 +1302,13 @@ class FakeChannel
         exchangeName: string,
         routingKey: string
     ): Promise<unknown> {
-        this.bindQueueCalls.push({
-            queueName,
-            exchangeName,
-            routingKey
-        });
+        this
+            .bindQueueCalls
+            .push({
+                queueName,
+                exchangeName,
+                routingKey
+            });
 
         return {};
     }
@@ -962,12 +1324,14 @@ class FakeChannel
             correlationId: string;
         }
     ): boolean {
-        this.publishCalls.push({
-            exchangeName,
-            routingKey,
-            content,
-            options
-        });
+        this
+            .publishCalls
+            .push({
+                exchangeName,
+                routingKey,
+                content,
+                options
+            });
 
         return true;
     }
@@ -979,10 +1343,12 @@ class FakeChannel
                 ConsumeMessage | null
         ) => void | Promise<void>
     ): Promise<unknown> {
-        this.consumeCalls.push({
-            queueName,
-            onMessage
-        });
+        this
+            .consumeCalls
+            .push({
+                queueName,
+                onMessage
+            });
 
         return {
             consumerTag:
@@ -991,26 +1357,51 @@ class FakeChannel
     }
 
     ack(
-        message: ConsumeMessage
+        message:
+            ConsumeMessage
     ): void {
-        this.acknowledgedMessages.push(
-            message
-        );
+        this
+            .acknowledgedMessages
+            .push(
+                message
+            );
     }
 
     nack(
-        message: ConsumeMessage,
+        message:
+            ConsumeMessage,
         allUpTo?: boolean,
         requeue?: boolean
     ): void {
-        this.nackedMessages.push({
-            message,
-            allUpTo,
-            requeue
-        });
+        this
+            .nackedMessages
+            .push({
+                message,
+                allUpTo,
+                requeue
+            });
     }
 
-    async close(): Promise<void> {
-        this.closeCalls += 1;
+    onClose(
+        handler: () => void
+    ): void {
+        this.closeHandlers.push(
+            handler
+        );
+    }
+
+    triggerClose(): void {
+        for (
+            const handler
+            of this.closeHandlers
+        ) {
+            handler();
+        }
+    }
+
+    async close():
+        Promise<void> {
+        this.closeCalls +=
+            1;
     }
 }

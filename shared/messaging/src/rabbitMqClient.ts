@@ -1,12 +1,20 @@
 import * as amqp from "amqplib";
-import type { ConsumeMessage } from "amqplib";
+import type {
+    ConsumeMessage
+} from "amqplib";
 import {
     createStructuredLogger,
     type AppLogger
 } from "@commerce-flow/logging";
 
 export interface RabbitMqConnection {
-    createChannel(): Promise<RabbitMqChannel>;
+    createChannel():
+        Promise<RabbitMqChannel>;
+
+    onClose(
+        handler: () => void
+    ): void;
+
     close(): Promise<void>;
 }
 
@@ -23,7 +31,8 @@ export interface RabbitMqChannel {
         queueName: string,
         options: {
             durable: boolean;
-            arguments?: Record<string, unknown>;
+            arguments?:
+            Record<string, unknown>;
         }
     ): Promise<unknown>;
 
@@ -48,16 +57,23 @@ export interface RabbitMqChannel {
     consume(
         queueName: string,
         onMessage: (
-            message: ConsumeMessage | null
+            message:
+                ConsumeMessage | null
         ) => void | Promise<void>
     ): Promise<unknown>;
 
-    ack(message: ConsumeMessage): void;
+    ack(
+        message: ConsumeMessage
+    ): void;
 
     nack(
         message: ConsumeMessage,
         allUpTo?: boolean,
         requeue?: boolean
+    ): void;
+
+    onClose(
+        handler: () => void
     ): void;
 
     close(): Promise<void>;
@@ -76,7 +92,9 @@ export interface RabbitMqClientDependencies {
         url: string
     ): Promise<RabbitMqConnection>;
 
-    sleep(milliseconds: number): Promise<void>;
+    sleep(
+        milliseconds: number
+    ): Promise<void>;
 
     logger: RabbitMqLogger;
 }
@@ -94,15 +112,23 @@ export class RabbitMqClient {
         RabbitMqChannel | null = null;
 
     private readonly processedEventIdsByQueueName =
-        new Map<string, Set<string>>();
+        new Map<
+            string,
+            Set<string>
+        >();
 
     private readonly connectToBroker:
-        RabbitMqClientDependencies["connect"];
+        RabbitMqClientDependencies[
+        "connect"
+        ];
 
     private readonly delay:
-        RabbitMqClientDependencies["sleep"];
+        RabbitMqClientDependencies[
+        "sleep"
+        ];
 
-    private readonly logger: RabbitMqLogger;
+    private readonly logger:
+        RabbitMqLogger;
 
     constructor(
         private readonly url: string,
@@ -111,7 +137,9 @@ export class RabbitMqClient {
         private readonly options:
             RabbitMqClientOptions = {},
         dependencies:
-            Partial<RabbitMqClientDependencies> = {}
+            Partial<
+                RabbitMqClientDependencies
+            > = {}
     ) {
         this.connectToBroker =
             dependencies.connect ??
@@ -128,43 +156,108 @@ export class RabbitMqClient {
             );
     }
 
+    isReady(): boolean {
+        return (
+            this.connection !== null &&
+            this.channel !== null
+        );
+    }
+
     async connect(): Promise<void> {
         if (this.channel) {
             return;
         }
 
         const maxConnectionRetries =
-            this.options.maxConnectionRetries ??
+            this.options
+                .maxConnectionRetries ??
             10;
 
         const retryDelayInMs =
-            this.options.retryDelayInMs ??
+            this.options
+                .retryDelayInMs ??
             2000;
 
         let lastError: unknown;
 
         for (
             let attempt = 1;
-            attempt <= maxConnectionRetries;
+            attempt <=
+            maxConnectionRetries;
             attempt += 1
         ) {
             try {
+                const connection =
+                    await this
+                        .connectToBroker(
+                            this.url
+                        );
+
                 this.connection =
-                    await this.connectToBroker(
-                        this.url
-                    );
+                    connection;
 
-                this.channel =
-                    await this.connection
-                        .createChannel();
+                connection.onClose(
+                    () => {
+                        if (
+                            this.connection !==
+                            connection
+                        ) {
+                            return;
+                        }
 
-                await this.channel.assertExchange(
-                    this.exchangeName,
-                    "topic",
-                    {
-                        durable: true
+                        this.connection =
+                            null;
+
+                        this.channel =
+                            null;
+
+                        this.logger.warn(
+                            "RabbitMQ connection closed",
+                            {
+                                exchangeName:
+                                    this.exchangeName
+                            }
+                        );
                     }
                 );
+
+                const channel =
+                    await connection
+                        .createChannel();
+
+                this.channel =
+                    channel;
+
+                channel.onClose(
+                    () => {
+                        if (
+                            this.channel !==
+                            channel
+                        ) {
+                            return;
+                        }
+
+                        this.channel =
+                            null;
+
+                        this.logger.warn(
+                            "RabbitMQ channel closed",
+                            {
+                                exchangeName:
+                                    this.exchangeName
+                            }
+                        );
+                    }
+                );
+
+                await channel
+                    .assertExchange(
+                        this.exchangeName,
+                        "topic",
+                        {
+                            durable: true
+                        }
+                    );
 
                 this.logger.info(
                     "Connected to RabbitMQ exchange",
@@ -176,7 +269,8 @@ export class RabbitMqClient {
 
                 return;
             } catch (error) {
-                lastError = error;
+                lastError =
+                    error;
 
                 this.logger.warn(
                     "RabbitMQ connection attempt failed",
@@ -212,7 +306,9 @@ export class RabbitMqClient {
         );
     }
 
-    async publish<TEvent extends MessageEvent>(
+    async publish<
+        TEvent extends MessageEvent
+    >(
         routingKey: string,
         event: TEvent
     ): Promise<void> {
@@ -224,9 +320,12 @@ export class RabbitMqClient {
             );
         }
 
-        const body = Buffer.from(
-            JSON.stringify(event)
-        );
+        const body =
+            Buffer.from(
+                JSON.stringify(
+                    event
+                )
+            );
 
         this.channel.publish(
             this.exchangeName,
@@ -235,8 +334,10 @@ export class RabbitMqClient {
             {
                 contentType:
                     "application/json",
-                deliveryMode: 2,
-                messageId: event.eventId,
+                deliveryMode:
+                    2,
+                messageId:
+                    event.eventId,
                 correlationId:
                     event.correlationId
             }
@@ -256,12 +357,15 @@ export class RabbitMqClient {
         );
     }
 
-    async subscribe<TEvent extends MessageEvent>(
+    async subscribe<
+        TEvent extends MessageEvent
+    >(
         queueName: string,
         routingKeys: string[],
         handler: (
             event: TEvent,
-            message: ConsumeMessage
+            message:
+                ConsumeMessage
         ) => Promise<void>
     ): Promise<void> {
         await this.connect();
@@ -273,129 +377,150 @@ export class RabbitMqClient {
         }
 
         const deadLetterExchangeName =
-            `${this.exchangeName}.dead-letter`;
+            `${this.exchangeName}` +
+            `.dead-letter`;
 
         const deadLetterQueueName =
-            `${queueName}.dead-letter`;
+            `${queueName}` +
+            `.dead-letter`;
 
         const deadLetterRoutingKey =
-            `${queueName}.dead-letter`;
+            `${queueName}` +
+            `.dead-letter`;
 
-        await this.channel.assertExchange(
-            deadLetterExchangeName,
-            "topic",
-            {
-                durable: true
-            }
-        );
-
-        await this.channel.assertQueue(
-            deadLetterQueueName,
-            {
-                durable: true
-            }
-        );
-
-        await this.channel.bindQueue(
-            deadLetterQueueName,
-            deadLetterExchangeName,
-            deadLetterRoutingKey
-        );
-
-        await this.channel.assertQueue(
-            queueName,
-            {
-                durable: true,
-                arguments: {
-                    "x-dead-letter-exchange":
-                        deadLetterExchangeName,
-                    "x-dead-letter-routing-key":
-                        deadLetterRoutingKey
+        await this.channel
+            .assertExchange(
+                deadLetterExchangeName,
+                "topic",
+                {
+                    durable: true
                 }
-            }
-        );
+            );
+
+        await this.channel
+            .assertQueue(
+                deadLetterQueueName,
+                {
+                    durable: true
+                }
+            );
+
+        await this.channel
+            .bindQueue(
+                deadLetterQueueName,
+                deadLetterExchangeName,
+                deadLetterRoutingKey
+            );
+
+        await this.channel
+            .assertQueue(
+                queueName,
+                {
+                    durable: true,
+                    arguments: {
+                        "x-dead-letter-exchange":
+                            deadLetterExchangeName,
+                        "x-dead-letter-routing-key":
+                            deadLetterRoutingKey
+                    }
+                }
+            );
 
         for (
-            const routingKey of routingKeys
+            const routingKey
+            of routingKeys
         ) {
-            await this.channel.bindQueue(
-                queueName,
-                this.exchangeName,
-                routingKey
-            );
+            await this.channel
+                .bindQueue(
+                    queueName,
+                    this.exchangeName,
+                    routingKey
+                );
         }
 
-        await this.channel.consume(
-            queueName,
-            async message => {
-                if (!message) {
-                    return;
-                }
-
-                try {
-                    const event = JSON.parse(
-                        message.content.toString()
-                    ) as TEvent;
-
-                    const eventId =
-                        getRequiredEventId(event);
-
-                    if (
-                        this.hasProcessedEvent(
-                            queueName,
-                            eventId
-                        )
-                    ) {
-                        this.logger.warn(
-                            "Duplicate event received",
-                            {
-                                eventId,
-                                queueName,
-                                correlationId:
-                                    event.correlationId,
-                                action:
-                                    "acknowledge-without-reprocessing"
-                            }
-                        );
-
-                        this.channel?.ack(
-                            message
-                        );
-
+        await this.channel
+            .consume(
+                queueName,
+                async message => {
+                    if (!message) {
                         return;
                     }
 
-                    await handler(
-                        event,
-                        message
-                    );
+                    try {
+                        const event =
+                            JSON.parse(
+                                message
+                                    .content
+                                    .toString()
+                            ) as TEvent;
 
-                    this.markEventAsProcessed(
-                        queueName,
-                        eventId
-                    );
+                        const eventId =
+                            getRequiredEventId(
+                                event
+                            );
 
-                    this.channel?.ack(
-                        message
-                    );
-                } catch (error) {
-                    this.logger.error(
-                        "Failed to process message",
-                        error,
-                        {
-                            queueName,
-                            deadLetterQueueName
+                        if (
+                            this
+                                .hasProcessedEvent(
+                                    queueName,
+                                    eventId
+                                )
+                        ) {
+                            this.logger.warn(
+                                "Duplicate event received",
+                                {
+                                    eventId,
+                                    queueName,
+                                    correlationId:
+                                        event
+                                            .correlationId,
+                                    action:
+                                        "acknowledge-without-reprocessing"
+                                }
+                            );
+
+                            this.channel
+                                ?.ack(
+                                    message
+                                );
+
+                            return;
                         }
-                    );
 
-                    this.channel?.nack(
-                        message,
-                        false,
-                        false
-                    );
+                        await handler(
+                            event,
+                            message
+                        );
+
+                        this
+                            .markEventAsProcessed(
+                                queueName,
+                                eventId
+                            );
+
+                        this.channel
+                            ?.ack(
+                                message
+                            );
+                    } catch (error) {
+                        this.logger.error(
+                            "Failed to process message",
+                            error,
+                            {
+                                queueName,
+                                deadLetterQueueName
+                            }
+                        );
+
+                        this.channel
+                            ?.nack(
+                                message,
+                                false,
+                                false
+                            );
+                    }
                 }
-            }
-        );
+            );
 
         this.logger.info(
             "Subscribed queue",
@@ -417,16 +542,29 @@ export class RabbitMqClient {
     }
 
     async close(): Promise<void> {
-        await this.channel
-            ?.close()
-            .catch(() => undefined);
+        const channel =
+            this.channel;
 
-        await this.connection
-            ?.close()
-            .catch(() => undefined);
+        const connection =
+            this.connection;
 
-        this.channel = null;
-        this.connection = null;
+        this.channel =
+            null;
+
+        this.connection =
+            null;
+
+        await channel
+            ?.close()
+            .catch(
+                () => undefined
+            );
+
+        await connection
+            ?.close()
+            .catch(
+                () => undefined
+            );
     }
 
     private hasProcessedEvent(
@@ -434,12 +572,17 @@ export class RabbitMqClient {
         eventId: string
     ): boolean {
         const processedEventIds =
-            this.processedEventIdsByQueueName
-                .get(queueName);
+            this
+                .processedEventIdsByQueueName
+                .get(
+                    queueName
+                );
 
         return (
             processedEventIds
-                ?.has(eventId) ??
+                ?.has(
+                    eventId
+                ) ??
             false
         );
     }
@@ -449,18 +592,28 @@ export class RabbitMqClient {
         eventId: string
     ): void {
         const existingSet =
-            this.processedEventIdsByQueueName
-                .get(queueName);
+            this
+                .processedEventIdsByQueueName
+                .get(
+                    queueName
+                );
 
         if (existingSet) {
-            existingSet.add(eventId);
+            existingSet.add(
+                eventId
+            );
+
             return;
         }
 
-        this.processedEventIdsByQueueName.set(
-            queueName,
-            new Set([eventId])
-        );
+        this
+            .processedEventIdsByQueueName
+            .set(
+                queueName,
+                new Set([
+                    eventId
+                ])
+            );
     }
 }
 
@@ -468,40 +621,157 @@ async function connectToRabbitMq(
     url: string
 ): Promise<RabbitMqConnection> {
     const connection =
-        await amqp.connect(url);
+        await amqp.connect(
+            url
+        );
 
     return {
-        createChannel: async () => {
-            const channel =
+        createChannel:
+            async () => {
+                const channel =
+                    await connection
+                        .createChannel();
+
+                return {
+                    assertExchange:
+                        async (
+                            exchangeName,
+                            exchangeType,
+                            options
+                        ) => {
+                            return await channel
+                                .assertExchange(
+                                    exchangeName,
+                                    exchangeType,
+                                    options
+                                );
+                        },
+
+                    assertQueue:
+                        async (
+                            queueName,
+                            options
+                        ) => {
+                            return await channel
+                                .assertQueue(
+                                    queueName,
+                                    options
+                                );
+                        },
+
+                    bindQueue:
+                        async (
+                            queueName,
+                            exchangeName,
+                            routingKey
+                        ) => {
+                            return await channel
+                                .bindQueue(
+                                    queueName,
+                                    exchangeName,
+                                    routingKey
+                                );
+                        },
+
+                    publish:
+                        (
+                            exchangeName,
+                            routingKey,
+                            content,
+                            options
+                        ) => {
+                            return channel
+                                .publish(
+                                    exchangeName,
+                                    routingKey,
+                                    content,
+                                    options
+                                );
+                        },
+
+                    consume:
+                        async (
+                            queueName,
+                            onMessage
+                        ) => {
+                            return await channel
+                                .consume(
+                                    queueName,
+                                    onMessage
+                                );
+                        },
+
+                    ack:
+                        message => {
+                            channel.ack(
+                                message
+                            );
+                        },
+
+                    nack:
+                        (
+                            message,
+                            allUpTo,
+                            requeue
+                        ) => {
+                            channel.nack(
+                                message,
+                                allUpTo,
+                                requeue
+                            );
+                        },
+
+                    onClose:
+                        handler => {
+                            channel.on(
+                                "close",
+                                handler
+                            );
+                        },
+
+                    close:
+                        async () => {
+                            await channel
+                                .close();
+                        }
+                };
+            },
+
+        onClose:
+            handler => {
+                connection.on(
+                    "close",
+                    handler
+                );
+            },
+
+        close:
+            async () => {
                 await connection
-                    .createChannel();
-
-            return channel as unknown as
-                RabbitMqChannel;
-        },
-
-        close: async () => {
-            await connection.close();
-        }
+                    .close();
+            }
     };
 }
 
 function sleep(
     milliseconds: number
 ): Promise<void> {
-    return new Promise(resolve => {
-        setTimeout(
-            resolve,
-            milliseconds
-        );
-    });
+    return new Promise(
+        resolve => {
+            setTimeout(
+                resolve,
+                milliseconds
+            );
+        }
+    );
 }
 
 function getRequiredEventId(
     event: MessageEvent
 ): string {
     if (
-        typeof event.eventId !== "string" ||
+        typeof event.eventId !==
+        "string" ||
         event.eventId.length === 0
     ) {
         throw new Error(
@@ -524,15 +794,23 @@ function getErrorMessage(
     }
 
     if (
-        typeof error === "object" &&
+        typeof error ===
+        "object" &&
         error !== null
     ) {
-        return JSON.stringify(error);
+        return JSON.stringify(
+            error
+        );
     }
 
-    const message = String(error);
+    const message =
+        String(
+            error
+        );
 
-    if (message.length > 0) {
+    if (
+        message.length > 0
+    ) {
         return message;
     }
 
