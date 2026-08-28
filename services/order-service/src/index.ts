@@ -2,7 +2,8 @@ import {
     createStructuredLogger
 } from "@commerce-flow/logging";
 import {
-    RabbitMqClient
+    RabbitMqClient,
+    RabbitMqSupervisor
 } from "@commerce-flow/messaging";
 import {
     createOrderApp,
@@ -56,9 +57,22 @@ const app =
             rabbitMq
     });
 
-async function start(): Promise<void> {
-    await rabbitMq.connect();
+const supervisorController =
+    new AbortController();
 
+const rabbitMqSupervisor =
+    new RabbitMqSupervisor(
+        rabbitMq,
+        async () => {
+            await rabbitMq.connect();
+        },
+        {},
+        {
+            logger
+        }
+    );
+
+function start(): void {
     app.listen(
         port,
         () => {
@@ -70,19 +84,23 @@ async function start(): Promise<void> {
             );
         }
     );
+
+    void rabbitMqSupervisor
+        .run(
+            supervisorController.signal
+        )
+        .catch(error => {
+            logger.error(
+                "RabbitMQ supervisor stopped unexpectedly",
+                error,
+                {
+                    port
+                }
+            );
+        });
 }
 
-start().catch(error => {
-    logger.error(
-        "Failed to start service",
-        error,
-        {
-            port
-        }
-    );
-
-    process.exit(1);
-});
+start();
 
 process.on(
     "SIGINT",
@@ -90,6 +108,8 @@ process.on(
         logger.info(
             "Service shutting down"
         );
+
+        supervisorController.abort();
 
         await rabbitMq.close();
 
