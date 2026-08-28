@@ -200,6 +200,106 @@ test(
 );
 
 test(
+    "closes the stale connection before reconnecting after a channel close",
+    async () => {
+        const firstChannel =
+            new FakeChannel();
+
+        const firstConnection =
+            new FakeConnection(
+                firstChannel
+            );
+
+        const secondChannel =
+            new FakeChannel();
+
+        const secondConnection =
+            new FakeConnection(
+                secondChannel
+            );
+
+        const connections = [
+            firstConnection,
+            secondConnection
+        ];
+
+        let connectCalls =
+            0;
+
+        const client =
+            new RabbitMqClient(
+                "amqp://test",
+                "commerce.events",
+                {},
+                {
+                    connect:
+                        async () => {
+                            const connection =
+                                connections[
+                                connectCalls
+                                ];
+
+                            connectCalls +=
+                                1;
+
+                            assert.ok(
+                                connection
+                            );
+
+                            return connection;
+                        },
+
+                    sleep:
+                        async () =>
+                            undefined,
+
+                    logger:
+                        silentLogger
+                }
+            );
+
+        await client.connect();
+
+        assert.equal(
+            client.isReady(),
+            true
+        );
+
+        firstChannel
+            .triggerClose();
+
+        assert.equal(
+            client.isReady(),
+            false
+        );
+
+        await client.connect();
+
+        assert.equal(
+            connectCalls,
+            2
+        );
+
+        assert.equal(
+            firstConnection
+                .closeCalls,
+            1
+        );
+
+        assert.equal(
+            secondConnection
+                .closeCalls,
+            0
+        );
+
+        assert.equal(
+            client.isReady(),
+            true
+        );
+    }
+);
+
+test(
     "retries failed connections using the configured delay",
     async () => {
         const channel =

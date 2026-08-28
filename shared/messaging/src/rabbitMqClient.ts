@@ -168,6 +168,10 @@ export class RabbitMqClient {
             return;
         }
 
+        if (this.connection) {
+            await this.close();
+        }
+
         const maxConnectionRetries =
             this.options
                 .maxConnectionRetries ??
