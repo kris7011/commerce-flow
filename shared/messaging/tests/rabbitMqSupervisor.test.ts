@@ -10,7 +10,7 @@ import {
 } from "../src/rabbitMqSupervisor.js";
 
 test(
-    "initializes RabbitMQ when the dependency is not ready",
+    "initializes RabbitMQ before reporting ready",
     async () => {
         const client =
             new FakeReadinessClient(
@@ -54,6 +54,11 @@ test(
                 }
             );
 
+        assert.equal(
+            supervisor.isReady(),
+            false
+        );
+
         await supervisor.run(
             controller.signal
         );
@@ -67,11 +72,16 @@ test(
             client.isReady(),
             true
         );
+
+        assert.equal(
+            supervisor.isReady(),
+            true
+        );
     }
 );
 
 test(
-    "does not initialize while RabbitMQ remains ready",
+    "initializes once even when the RabbitMQ client is already connected",
     async () => {
         const client =
             new FakeReadinessClient(
@@ -104,13 +114,105 @@ test(
                 }
             );
 
+        assert.equal(
+            supervisor.isReady(),
+            false
+        );
+
         await supervisor.run(
             controller.signal
         );
 
         assert.equal(
             initializeCalls,
-            0
+            1
+        );
+
+        assert.equal(
+            supervisor.isReady(),
+            true
+        );
+    }
+);
+
+test(
+    "does not report ready while initialization is still running",
+    async () => {
+        const client =
+            new FakeReadinessClient(
+                true
+            );
+
+        const controller =
+            new AbortController();
+
+        let releaseInitialization:
+            (() => void) | undefined;
+
+        const initializationGate =
+            new Promise<void>(
+                resolve => {
+                    releaseInitialization =
+                        resolve;
+                }
+            );
+
+        let initializationStarted:
+            (() => void) | undefined;
+
+        const initializationStartedGate =
+            new Promise<void>(
+                resolve => {
+                    initializationStarted =
+                        resolve;
+                }
+            );
+
+        const supervisor =
+            new RabbitMqSupervisor(
+                client,
+                async () => {
+                    initializationStarted?.();
+
+                    await initializationGate;
+                },
+                {},
+                {
+                    logger:
+                        silentLogger,
+
+                    sleep:
+                        async () => {
+                            controller
+                                .abort();
+                        }
+                }
+            );
+
+        const runPromise =
+            supervisor.run(
+                controller.signal
+            );
+
+        await initializationStartedGate;
+
+        assert.equal(
+            client.isReady(),
+            true
+        );
+
+        assert.equal(
+            supervisor.isReady(),
+            false
+        );
+
+        releaseInitialization?.();
+
+        await runPromise;
+
+        assert.equal(
+            supervisor.isReady(),
+            true
         );
     }
 );
@@ -120,7 +222,7 @@ test(
     async () => {
         const client =
             new FakeReadinessClient(
-                true
+                false
             );
 
         const controller =
@@ -174,12 +276,67 @@ test(
 
         assert.equal(
             initializeCalls,
-            1
+            2
         );
 
         assert.equal(
             client.isReady(),
             true
+        );
+
+        assert.equal(
+            supervisor.isReady(),
+            true
+        );
+    }
+);
+
+test(
+    "reports not ready immediately when the RabbitMQ client loses readiness",
+    async () => {
+        const client =
+            new FakeReadinessClient(
+                false
+            );
+
+        const controller =
+            new AbortController();
+
+        const supervisor =
+            new RabbitMqSupervisor(
+                client,
+                async () => {
+                    client.ready =
+                        true;
+                },
+                {},
+                {
+                    logger:
+                        silentLogger,
+
+                    sleep:
+                        async () => {
+                            controller
+                                .abort();
+                        }
+                }
+            );
+
+        await supervisor.run(
+            controller.signal
+        );
+
+        assert.equal(
+            supervisor.isReady(),
+            true
+        );
+
+        client.ready =
+            false;
+
+        assert.equal(
+            supervisor.isReady(),
+            false
         );
     }
 );
@@ -246,6 +403,11 @@ test(
                                     25
                                 );
 
+                                assert.equal(
+                                    supervisor.isReady(),
+                                    false
+                                );
+
                                 return;
                             }
 
@@ -262,6 +424,11 @@ test(
         assert.equal(
             initializeCalls,
             2
+        );
+
+        assert.equal(
+            supervisor.isReady(),
+            true
         );
 
         assert.equal(
@@ -328,6 +495,11 @@ test(
         assert.equal(
             initializeCalls,
             0
+        );
+
+        assert.equal(
+            supervisor.isReady(),
+            false
         );
     }
 );

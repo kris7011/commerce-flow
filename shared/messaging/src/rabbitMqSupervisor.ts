@@ -39,6 +39,9 @@ export class RabbitMqSupervisor {
         "sleep"
         ];
 
+    private initialized =
+        false;
+
     constructor(
         private readonly client:
             RabbitMqReadinessClient,
@@ -68,13 +71,18 @@ export class RabbitMqSupervisor {
             sleep;
     }
 
+    isReady(): boolean {
+        return (
+            this.initialized &&
+            this.client.isReady()
+        );
+    }
+
     async run(
         signal: AbortSignal
     ): Promise<void> {
         while (!signal.aborted) {
-            if (
-                this.client.isReady()
-            ) {
+            if (this.isReady()) {
                 await this.delay(
                     this.readyCheckIntervalInMs,
                     signal
@@ -83,8 +91,18 @@ export class RabbitMqSupervisor {
                 continue;
             }
 
+            this.initialized =
+                false;
+
             try {
                 await this.initialize();
+
+                if (signal.aborted) {
+                    return;
+                }
+
+                this.initialized =
+                    this.client.isReady();
             } catch (error) {
                 if (signal.aborted) {
                     return;
@@ -101,7 +119,7 @@ export class RabbitMqSupervisor {
             }
 
             await this.delay(
-                this.client.isReady()
+                this.isReady()
                     ? this.readyCheckIntervalInMs
                     : this.retryDelayInMs,
                 signal
