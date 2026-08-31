@@ -46,14 +46,6 @@ const handleNotificationEvent =
         logger
     });
 
-const app =
-    createNotificationApp({
-        notificationReader:
-            notificationService,
-        readinessProbe:
-            rabbitMq
-    });
-
 const supervisorController =
     new AbortController();
 
@@ -77,6 +69,14 @@ const rabbitMqSupervisor =
             logger
         }
     );
+
+const app =
+    createNotificationApp({
+        notificationReader:
+            notificationService,
+        readinessProbe:
+            rabbitMqSupervisor
+    });
 
 function start(): void {
     app.listen(

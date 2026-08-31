@@ -93,14 +93,6 @@ const handlePaymentAuthorized =
         logger
     });
 
-const app =
-    createInventoryApp({
-        stockReader:
-            inventoryRepository,
-        readinessProbe:
-            rabbitMq
-    });
-
 const supervisorController =
     new AbortController();
 
@@ -123,6 +115,14 @@ const rabbitMqSupervisor =
             logger
         }
     );
+
+const app =
+    createInventoryApp({
+        stockReader:
+            inventoryRepository,
+        readinessProbe:
+            rabbitMqSupervisor
+    });
 
 function start(): void {
     app.listen(

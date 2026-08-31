@@ -48,15 +48,6 @@ const orderCreatedPublisher:
     }
 };
 
-const app =
-    createOrderApp({
-        orderService,
-        orderCreatedPublisher,
-        logger,
-        readinessProbe:
-            rabbitMq
-    });
-
 const supervisorController =
     new AbortController();
 
@@ -71,6 +62,15 @@ const rabbitMqSupervisor =
             logger
         }
     );
+
+const app =
+    createOrderApp({
+        orderService,
+        orderCreatedPublisher,
+        logger,
+        readinessProbe:
+            rabbitMqSupervisor
+    });
 
 function start(): void {
     app.listen(

@@ -61,12 +61,6 @@ const handleInventoryReserved =
         logger
     });
 
-const app =
-    createDeliveryApp({
-        readinessProbe:
-            rabbitMq
-    });
-
 const supervisorController =
     new AbortController();
 
@@ -89,6 +83,12 @@ const rabbitMqSupervisor =
             logger
         }
     );
+
+const app =
+    createDeliveryApp({
+        readinessProbe:
+            rabbitMqSupervisor
+    });
 
 function start(): void {
     app.listen(

@@ -61,12 +61,6 @@ const handleOrderCreated =
         logger
     });
 
-const app =
-    createPaymentApp({
-        readinessProbe:
-            rabbitMq
-    });
-
 const supervisorController =
     new AbortController();
 
@@ -88,6 +82,12 @@ const rabbitMqSupervisor =
             logger
         }
     );
+
+const app =
+    createPaymentApp({
+        readinessProbe:
+            rabbitMqSupervisor
+    });
 
 function start(): void {
     app.listen(
