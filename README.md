@@ -43,6 +43,8 @@ The project focuses on:
 * Reliability
 * Loose coupling
 * Failure handling
+* Dependency readiness
+* Runtime recovery
 * Maintainable infrastructure abstractions
 
 CommerceFlow is deliberately small enough to understand while still demonstrating patterns used in larger distributed systems.
@@ -74,6 +76,9 @@ CommerceFlow demonstrates another approach:
 * Failed messages can be moved to dead-letter queues.
 * Duplicate event deliveries can be detected.
 * A correlation identifier follows the complete workflow.
+* Services can remain alive while RabbitMQ is temporarily unavailable.
+* RabbitMQ-dependent readiness is reported separately from process liveness.
+* Consumer subscriptions can automatically recover after RabbitMQ becomes available again.
 
 ---
 
@@ -111,22 +116,23 @@ The Notification Service currently stores notifications in memory. It does not p
 
 ## What the project demonstrates
 
-| Area                 | Demonstrated concept                                   |
-| -------------------- | ------------------------------------------------------ |
-| Architecture         | Event-driven services                                  |
-| Communication        | Asynchronous RabbitMQ messaging                        |
-| Contracts            | Shared and typed TypeScript event definitions          |
-| Routing              | Topic exchange and explicit routing keys               |
-| Reliability          | Connection retry and dead-letter handling              |
-| Consistency          | Idempotent event processing                            |
-| Traceability         | Correlation identifiers across services                |
-| Observability        | Structured JSON logging with service and workflow context |
-| Service design       | Independent business responsibilities                  |
-| API design           | Express-based HTTP endpoints                           |
-| Development          | TypeScript monorepo using npm workspaces               |
-| Local infrastructure | RabbitMQ through Docker Compose                        |
-| Automation           | GitHub Actions validation on Node.js 20 and 22         |
-| Testing              | Unit, RabbitMQ integration and complete end-to-end testing |
+| Area                 | Demonstrated concept                                                       |
+| -------------------- | -------------------------------------------------------------------------- |
+| Architecture         | Event-driven services                                                      |
+| Communication        | Asynchronous RabbitMQ messaging                                            |
+| Contracts            | Shared and typed TypeScript event definitions                              |
+| Routing              | Topic exchange and explicit routing keys                                   |
+| Reliability          | Connection retry, readiness supervision, recovery and dead-letter handling |
+| Consistency          | In-process idempotent event processing                                     |
+| Traceability         | Correlation identifiers across services                                    |
+| Observability        | Structured JSON logging with service and workflow context                  |
+| Service design       | Independent business responsibilities                                      |
+| API design           | Express-based HTTP endpoints                                               |
+| Health model         | Separate liveness and dependency-aware readiness endpoints                 |
+| Development          | TypeScript monorepo using npm workspaces                                   |
+| Local infrastructure | RabbitMQ through Docker Compose                                            |
+| Automation           | GitHub Actions validation on Node.js 20 and 22                             |
+| Testing              | Unit, RabbitMQ integration, workflow E2E and recovery E2E testing          |
 
 ---
 
@@ -182,6 +188,9 @@ Each service:
 * Publishes the result of its work as a new event when required.
 * Preserves the workflow correlation identifier.
 * Uses shared messaging infrastructure without sharing business behaviour.
+* Exposes process liveness independently of RabbitMQ availability.
+* Exposes RabbitMQ-aware workload readiness.
+* Can recover its RabbitMQ dependency without restarting the process.
 * Can evolve independently within the boundaries of its event contracts.
 
 ---
@@ -198,6 +207,7 @@ The Order Service is the HTTP entry point for the workflow.
 
 * Exposes `POST /orders`.
 * Exposes `GET /health`.
+* Exposes `GET /ready`.
 * Validates incoming order requests.
 * Generates the order identifier.
 * Calculates the total order amount.
@@ -209,7 +219,8 @@ The Order Service is the HTTP entry point for the workflow.
 
 | Method | Endpoint  | Purpose                                        |
 | ------ | --------- | ---------------------------------------------- |
-| `GET`  | `/health` | Returns service health information             |
+| `GET`  | `/health` | Returns process liveness information           |
+| `GET`  | `/ready`  | Returns RabbitMQ dependency readiness          |
 | `POST` | `/orders` | Creates an order and starts the event workflow |
 
 The service does not call the Payment Service directly. Its responsibility ends when the order has been created and the event has been published.
@@ -225,6 +236,7 @@ The Payment Service reacts to new orders.
 ### Responsibilities
 
 * Exposes `GET /health`.
+* Exposes `GET /ready`.
 * Subscribes to `OrderCreated`.
 * Simulates payment authorization.
 * Creates a payment identifier.
@@ -233,9 +245,10 @@ The Payment Service reacts to new orders.
 
 ### Endpoints
 
-| Method | Endpoint  | Purpose                            |
-| ------ | --------- | ---------------------------------- |
-| `GET`  | `/health` | Returns service health information |
+| Method | Endpoint  | Purpose                               |
+| ------ | --------- | ------------------------------------- |
+| `GET`  | `/health` | Returns process liveness information  |
+| `GET`  | `/ready`  | Returns RabbitMQ dependency readiness |
 
 Payment authorization is deliberately simulated. The purpose is to demonstrate service collaboration and event handling rather than integration with a real payment provider.
 
@@ -250,6 +263,7 @@ The Inventory Service owns the current demo stock.
 ### Responsibilities
 
 * Exposes `GET /health`.
+* Exposes `GET /ready`.
 * Exposes `GET /stock`.
 * Subscribes to `PaymentAuthorized`.
 * Checks every requested order item.
@@ -260,10 +274,11 @@ The Inventory Service owns the current demo stock.
 
 ### Endpoints
 
-| Method | Endpoint  | Purpose                             |
-| ------ | --------- | ----------------------------------- |
-| `GET`  | `/health` | Returns service health information  |
-| `GET`  | `/stock`  | Returns the current in-memory stock |
+| Method | Endpoint  | Purpose                               |
+| ------ | --------- | ------------------------------------- |
+| `GET`  | `/health` | Returns process liveness information  |
+| `GET`  | `/ready`  | Returns RabbitMQ dependency readiness |
+| `GET`  | `/stock`  | Returns the current in-memory stock   |
 
 ### Initial stock
 
@@ -286,6 +301,7 @@ The Delivery Service reacts to successful inventory reservations.
 ### Responsibilities
 
 * Exposes `GET /health`.
+* Exposes `GET /ready`.
 * Subscribes to `InventoryReserved`.
 * Creates a delivery identifier.
 * Selects a simulated carrier.
@@ -294,9 +310,10 @@ The Delivery Service reacts to successful inventory reservations.
 
 ### Endpoints
 
-| Method | Endpoint  | Purpose                            |
-| ------ | --------- | ---------------------------------- |
-| `GET`  | `/health` | Returns service health information |
+| Method | Endpoint  | Purpose                               |
+| ------ | --------- | ------------------------------------- |
+| `GET`  | `/health` | Returns process liveness information  |
+| `GET`  | `/ready`  | Returns RabbitMQ dependency readiness |
 
 The current implementation uses `DefaultCarrier` and calculates the estimated delivery date as three days after the booking date.
 
@@ -313,6 +330,7 @@ The Notification Service creates customer-facing notification records based on w
 ### Responsibilities
 
 * Exposes `GET /health`.
+* Exposes `GET /ready`.
 * Exposes `GET /notifications`.
 * Subscribes to `DeliveryBooked`.
 * Subscribes to `InventoryReservationFailed`.
@@ -325,7 +343,8 @@ The Notification Service creates customer-facing notification records based on w
 
 | Method | Endpoint         | Purpose                                     |
 | ------ | ---------------- | ------------------------------------------- |
-| `GET`  | `/health`        | Returns service health information          |
+| `GET`  | `/health`        | Returns process liveness information        |
+| `GET`  | `/ready`         | Returns RabbitMQ dependency readiness       |
 | `GET`  | `/notifications` | Returns all current in-memory notifications |
 
 The current version does not send real email, SMS or push notifications.
@@ -498,6 +517,84 @@ Maximum attempts: 10
 Delay between attempts: 2000 milliseconds
 ```
 
+The `RabbitMqSupervisor` runs the service-specific RabbitMQ initialization in the background and can retry initialization after a failed connection cycle.
+
+---
+
+### Liveness, readiness and RabbitMQ recovery
+
+All five services expose separate liveness and readiness endpoints.
+
+`GET /health` reports whether the HTTP process is alive.
+
+It deliberately does not depend on RabbitMQ, which means the HTTP process can remain healthy while the messaging dependency is unavailable.
+
+`GET /ready` reports whether the service is able to perform its RabbitMQ-dependent workload.
+
+A service reports:
+
+```text
+HTTP 200
+Ready
+```
+
+only after the RabbitMQ initialization required by that service has completed and the underlying RabbitMQ connection and channel remain available.
+
+For the Order Service, initialization means establishing its RabbitMQ connection and channel.
+
+For the consuming services, initialization also includes:
+
+* Queue declaration
+* Dead-letter topology declaration
+* Routing-key bindings
+* Consumer subscription setup
+
+When RabbitMQ is unavailable:
+
+```text
+Service process alive
+    ↓
+/health = 200
+/ready  = 503
+```
+
+The shared `RabbitMqSupervisor` monitors RabbitMQ readiness in the background.
+
+If the RabbitMQ connection or channel is lost, the messaging client immediately becomes unready.
+
+The supervisor then attempts to reconnect and reruns the service-specific initialization.
+
+For consumer services, this means recreating the required subscription.
+
+Conceptually:
+
+```text
+RabbitMQ available
+    ↓
+Initialization complete
+    ↓
+/ready = 200
+    ↓
+RabbitMQ unavailable
+    ↓
+/health = 200
+/ready  = 503
+    ↓
+RabbitMQ becomes available again
+    ↓
+Reconnect
+    ↓
+Reinitialize subscriptions
+    ↓
+/ready = 200
+```
+
+This recovery behaviour is covered by a dedicated end-to-end test.
+
+The test starts all five services while RabbitMQ is unavailable, verifies their liveness and unready state, restores RabbitMQ and verifies that the original service processes recover without being restarted.
+
+The recovered services must then process a complete order workflow through to the final customer notification.
+
 ---
 
 ### Durable exchange and queues
@@ -535,6 +632,10 @@ Mark event as processed
     ↓
 Acknowledge message
 ```
+
+Each consumer callback retains the RabbitMQ channel on which its subscription was created.
+
+This ensures that an in-flight message is acknowledged or negatively acknowledged through its original subscription channel rather than a newer channel that may have been created after a reconnect.
 
 When processing fails, the message is rejected without requeueing and is routed to the queue-specific dead-letter queue.
 
@@ -616,12 +717,14 @@ commerce-flow/
 │   │
 │   └── messaging/
 │       ├── src/
+│       │   ├── index.ts
 │       │   ├── rabbitMqClient.ts
-│       │   └── index.ts
+│       │   └── rabbitMqSupervisor.ts
 │       ├── tests/
 │       │   ├── integration/
 │       │   │   └── rabbitMqClient.integration.test.ts
 │       │   ├── rabbitMqClient.test.ts
+│       │   ├── rabbitMqSupervisor.test.ts
 │       │   └── tsconfig.json
 │       ├── package.json
 │       └── tsconfig.json
@@ -686,7 +789,8 @@ commerce-flow/
 │
 ├── tests/
 │   ├── e2e/
-│   │   └── commerceFlow.e2e.test.ts
+│   │   ├── commerceFlow.e2e.test.ts
+│   │   └── rabbitMqRecovery.e2e.test.ts
 │   └── tsconfig.json
 │
 ├── docker-compose.yml
@@ -698,16 +802,16 @@ commerce-flow/
 
 ### Workspace responsibilities
 
-| Workspace                             | Responsibility                                                 |
-| ------------------------------------- | -------------------------------------------------------------- |
-| `@commerce-flow/contracts`            | Shared event envelopes, payloads and event types               |
-| `@commerce-flow/logging`              | Structured JSON logging and contextual application logs       |
-| `@commerce-flow/messaging`            | RabbitMQ connection, publishing, subscriptions and reliability |
-| `@commerce-flow/order-service`        | Order creation and `OrderCreated` publishing                   |
-| `@commerce-flow/payment-service`      | Payment authorization and `PaymentAuthorized` publishing       |
-| `@commerce-flow/inventory-service`    | Stock reservation and inventory result events                  |
-| `@commerce-flow/delivery-service`     | Delivery booking and `DeliveryBooked` publishing               |
-| `@commerce-flow/notification-service` | Customer notification creation for workflow outcomes           |
+| Workspace                             | Responsibility                                                         |
+| ------------------------------------- | ---------------------------------------------------------------------- |
+| `@commerce-flow/contracts`            | Shared event envelopes, payloads and event types                       |
+| `@commerce-flow/logging`              | Structured JSON logging and contextual application logs                |
+| `@commerce-flow/messaging`            | RabbitMQ connection, publishing, subscriptions, readiness and recovery |
+| `@commerce-flow/order-service`        | Order creation and `OrderCreated` publishing                           |
+| `@commerce-flow/payment-service`      | Payment authorization and `PaymentAuthorized` publishing               |
+| `@commerce-flow/inventory-service`    | Stock reservation and inventory result events                          |
+| `@commerce-flow/delivery-service`     | Delivery booking and `DeliveryBooked` publishing                       |
+| `@commerce-flow/notification-service` | Customer notification creation for workflow outcomes                   |
 
 Shared packages contain technical infrastructure and communication contracts.
 
@@ -729,6 +833,7 @@ Business behaviour remains inside the individual services.
 * Express
 * JSON over HTTP
 * Zod 4 runtime request validation
+* Separate liveness and readiness endpoints
 
 ### Messaging
 
@@ -740,7 +845,10 @@ Business behaviour remains inside the individual services.
 * Manual acknowledgements
 * Dead-letter queues
 * Correlation identifiers
-* Idempotent consumers
+* In-process idempotent consumers
+* Connection retry
+* Background dependency supervision
+* Automatic reconnect and subscription reinitialization
 
 ### Logging
 
@@ -757,11 +865,15 @@ Business behaviour remains inside the individual services.
 * Fake RabbitMQ connections and channels
 * Service business-logic unit tests
 * HTTP application component tests on dynamic local ports
+* Health and readiness endpoint tests
 * Event-handler component tests with injected publishers and loggers
 * Messaging infrastructure unit tests
+* RabbitMQ supervisor lifecycle tests
+* In-flight acknowledgement/reconnect testing
 * Real-broker RabbitMQ integration testing
 * Isolated integration-test topology with cleanup
 * Complete workflow end-to-end testing
+* RabbitMQ recovery end-to-end testing
 * Five independently running service processes during end-to-end testing
 * HTTP assertions against public service endpoints
 * Publisher failure-propagation tests
@@ -773,6 +885,7 @@ Business behaviour remains inside the individual services.
 * Docker
 * Docker Compose
 * RabbitMQ Management UI
+* RabbitMQ container health check
 
 ### Automation
 
@@ -783,6 +896,8 @@ Business behaviour remains inside the individual services.
 * Type checking
 * Workspace builds
 * Workspace test execution
+* Docker Compose controlled RabbitMQ startup
+* Integration and end-to-end validation
 
 ---
 
@@ -835,7 +950,7 @@ npm ci
 ### 3. Start RabbitMQ
 
 ```powershell
-docker compose up -d
+docker compose up -d --wait rabbitmq
 ```
 
 Check the running container:
@@ -843,6 +958,8 @@ Check the running container:
 ```powershell
 docker compose ps
 ```
+
+The container should report a healthy state before the services are considered fully ready.
 
 RabbitMQ uses:
 
@@ -909,9 +1026,11 @@ npm run dev:notification
 
 ---
 
-## Health checks
+## Health and readiness checks
 
-Check all services from PowerShell:
+CommerceFlow separates process liveness from dependency readiness.
+
+Check service liveness from PowerShell:
 
 ```powershell
 Invoke-RestMethod -Uri "http://localhost:3001/health"
@@ -930,9 +1049,55 @@ A healthy service returns a response similar to:
 }
 ```
 
-The health endpoints currently confirm that the HTTP process is running.
+The `/health` endpoints confirm that the HTTP process is alive.
 
-They do not yet verify all downstream dependencies such as RabbitMQ connectivity.
+They deliberately remain independent of RabbitMQ.
+
+Check RabbitMQ-aware readiness:
+
+```powershell
+Invoke-RestMethod -Uri "http://localhost:3001/ready"
+Invoke-RestMethod -Uri "http://localhost:3002/ready"
+Invoke-RestMethod -Uri "http://localhost:3003/ready"
+Invoke-RestMethod -Uri "http://localhost:3004/ready"
+Invoke-RestMethod -Uri "http://localhost:3005/ready"
+```
+
+A ready service returns a response similar to:
+
+```json
+{
+  "status": "Ready",
+  "service": "payment-service",
+  "dependencies": {
+    "rabbitMq": "Ready"
+  }
+}
+```
+
+When RabbitMQ is unavailable, the process can remain healthy while readiness returns HTTP `503` with:
+
+```json
+{
+  "status": "NotReady",
+  "service": "payment-service",
+  "dependencies": {
+    "rabbitMq": "NotReady"
+  }
+}
+```
+
+This distinction allows infrastructure to differentiate between:
+
+```text
+Process is alive
+```
+
+and:
+
+```text
+Service is ready to perform its RabbitMQ-dependent workload
+```
 
 ---
 
@@ -1118,7 +1283,7 @@ The stock remains unchanged when the reservation fails.
 npm run typecheck
 ```
 
-This executes the `typecheck` script in every workspace that defines one.
+This executes the `typecheck` script in every workspace that defines one and also type-checks the end-to-end test suite.
 
 Type checking detects issues such as:
 
@@ -1149,18 +1314,18 @@ npm test
 
 The root command executes test scripts in workspaces where they exist.
 
-All five services, the shared messaging client and the shared logging package include unit and component tests for their isolated behaviour.
+All five services, the shared messaging client, RabbitMQ supervisor and shared logging package include unit and component tests for their isolated behaviour.
 
-| Workspace            |  Tests | Covered behaviour                                                                                                                               |
-| -------------------- | -----: | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| Logging              |      5 | JSON serialization, log levels, error serialization, child loggers and inherited context                                                        |
-| Messaging            |     11 | Connection retry, publishing, queue topology, dead-letter routing, acknowledgements, duplicate handling, reconnecting and structured logging    |
-| Order Service        |     11 | Zod request validation, correlation identifiers, totals, event creation, HTTP endpoints, publishing and structured request logging              |
-| Payment Service      |      6 | Payment event creation, data preservation, health endpoint, structured event coordination and publisher failure propagation                     |
-| Inventory Service    |      9 | Reservation rules, health and stock endpoints, structured success and failure logging and publisher failure propagation                         |
-| Delivery Service     |      7 | Delivery creation, date calculation, health endpoint, structured event coordination, workflow identifiers and publisher failure propagation     |
-| Notification Service |      9 | Notification creation, defensive copies, health and notification endpoints, both event-handler paths and structured logging                    |
-| **Total**            | **58** |                                                                                                                                                 |
+| Workspace            |  Tests | Covered behaviour                                                                                                                                                                                                  |
+| -------------------- | -----: | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Logging              |      5 | JSON serialization, log levels, error serialization, child loggers and inherited context                                                                                                                           |
+| Messaging            |     23 | Connection lifecycle and retry, readiness, publishing, queue and dead-letter topology, acknowledgements, duplicate handling, reconnection, supervisor recovery, subscription-channel safety and structured logging |
+| Order Service        |     13 | Zod request validation, correlation identifiers, totals, event creation, health and readiness endpoints, publishing and structured request logging                                                                 |
+| Payment Service      |      8 | Payment event creation, data preservation, health and readiness endpoints, structured event coordination and publisher failure propagation                                                                         |
+| Inventory Service    |     11 | Reservation rules, health, readiness and stock endpoints, structured success and failure logging and publisher failure propagation                                                                                 |
+| Delivery Service     |      9 | Delivery creation, date calculation, health and readiness endpoints, structured event coordination, workflow identifiers and publisher failure propagation                                                         |
+| Notification Service |     11 | Notification creation, defensive copies, health, readiness and notification endpoints, both event-handler paths and structured logging                                                                             |
+| **Total**            | **80** |                                                                                                                                                                                                                    |
 
 These tests do not require RabbitMQ or separately running service processes.
 
@@ -1168,9 +1333,13 @@ The HTTP application tests create temporary in-process Express servers on dynami
 
 The event-handler tests inject recording publishers and loggers to verify coordination, produced results and failure propagation without RabbitMQ.
 
-The messaging tests use fake connection and channel implementations to verify the behaviour of `RabbitMqClient`.
+The messaging tests use fake connection and channel implementations to verify `RabbitMqClient`, connection lifecycle behaviour and `RabbitMqSupervisor` readiness and recovery behaviour.
+
+The tests also cover the reconnect edge case where an in-flight message must remain associated with the RabbitMQ channel that originally delivered it.
 
 The logging tests verify structured JSON serialization, log levels, error serialization and inherited child-logger context.
+
+---
 
 ### RabbitMQ integration test
 
@@ -1196,13 +1365,29 @@ It verifies:
 
 The integration test requires RabbitMQ to be running locally or available through the `RABBITMQ_URL` environment variable.
 
-### Complete end-to-end workflow test
+---
+
+### End-to-end tests
 
 ```powershell
 npm run test:e2e
 ```
 
-The end-to-end test starts all five services as independent Node.js processes and uses a real RabbitMQ broker.
+The root end-to-end command runs two tests sequentially:
+
+```text
+Workflow E2E
+    ↓
+RabbitMQ recovery E2E
+```
+
+### Workflow end-to-end test
+
+```powershell
+npm run test:e2e:workflow
+```
+
+The workflow test starts all five services as independent Node.js processes and uses a real RabbitMQ broker.
 
 The test interacts with the system only through its public HTTP endpoints:
 
@@ -1226,6 +1411,8 @@ DeliveryBooked
 DeliveryBooked notification
 ```
 
+and:
+
 ```text
 Insufficient inventory
     ↓
@@ -1240,9 +1427,67 @@ InventoryReservationFailed notification
 
 It also verifies that successful reservations reduce stock and failed reservations leave stock unchanged.
 
-The services use test-specific ports `3101` through `3105` and are stopped after the test completes.
+The workflow-test services use test-specific ports `3101` through `3105` and are stopped after the test completes.
 
-RabbitMQ must be running locally or available through the `RABBITMQ_URL` environment variable.
+---
+
+### RabbitMQ recovery end-to-end test
+
+```powershell
+npm run test:e2e:recovery
+```
+
+The recovery test verifies dependency lifecycle behaviour rather than only the normal workflow.
+
+It:
+
+1. Stops RabbitMQ.
+2. Waits for the broker port to become unavailable.
+3. Starts all five service processes.
+4. Verifies that every `/health` endpoint returns HTTP `200`.
+5. Verifies that every `/ready` endpoint returns HTTP `503`.
+6. Records the original service process identifiers.
+7. Starts RabbitMQ again through Docker Compose.
+8. Waits for the broker to become healthy and reachable.
+9. Waits for every `/ready` endpoint to return HTTP `200`.
+10. Verifies that the original service processes remained running.
+11. Creates an order.
+12. Verifies that the recovered system processes the order through to a `DeliveryBooked` notification.
+
+Conceptually:
+
+```text
+RabbitMQ unavailable
+    ↓
+Start five services
+    ↓
+/health = 200
+/ready  = 503
+    ↓
+Start RabbitMQ
+    ↓
+Reconnect and reinitialize
+    ↓
+/ready = 200
+    ↓
+Same service processes remain alive
+    ↓
+Create order
+    ↓
+OrderCreated
+    ↓
+PaymentAuthorized
+    ↓
+InventoryReserved
+    ↓
+DeliveryBooked
+    ↓
+Customer notification
+```
+
+The recovery-test services use test-specific ports `3201` through `3205`.
+
+RabbitMQ is controlled through Docker Compose during this test and is restored to a running healthy state during cleanup.
 
 ---
 
@@ -1280,9 +1525,9 @@ Node.js 22.x
 Each matrix job performs:
 
 ```text
-Start RabbitMQ service container
+Checkout repository
     ↓
-Wait for RabbitMQ health check
+Set up Node.js
     ↓
 npm ci
     ↓
@@ -1292,21 +1537,28 @@ npm run build
     ↓
 npm test
     ↓
+docker compose up -d --wait rabbitmq
+    ↓
 npm run test:integration
     ↓
 npm run test:e2e
+    ↓
+docker compose down
 ```
 
 The jobs use:
 
 * Read-only repository permissions
 * npm dependency caching
-* A RabbitMQ service container
-* A RabbitMQ broker health check
+* RabbitMQ managed through Docker Compose
+* Health-gated RabbitMQ startup through Docker Compose
 * A ten-minute timeout
 * Cancellation of outdated workflow runs on the same reference
 * Independent reporting for both Node.js versions
-* Complete workflow validation through five independently running services
+* Unit and component validation
+* Real RabbitMQ integration validation
+* Complete workflow end-to-end validation
+* RabbitMQ dependency recovery validation through five independently running services
 
 ---
 
@@ -1403,6 +1655,11 @@ The messaging workspace centralizes:
 * Acknowledgement
 * Dead-letter configuration
 * Duplicate event detection
+* Connection lifecycle tracking
+* Dependency readiness
+* Background RabbitMQ supervision
+* Reconnection
+* Subscription reinitialization
 * Connection shutdown
 
 This avoids duplicating the same infrastructure code in every service.
@@ -1422,7 +1679,7 @@ Unit tests can instead inject:
 * A deterministic delay function
 * A silent test logger
 
-This keeps production behaviour unchanged while allowing retry, routing, acknowledgement and failure handling to be tested deterministically.
+This keeps normal runtime behaviour unchanged while allowing retry, routing, acknowledgement and failure handling to be tested deterministically.
 
 ---
 
@@ -1445,6 +1702,7 @@ The messaging unit tests verify:
 * Connection reuse
 * Connection retries
 * Retry exhaustion
+* Connection and channel readiness
 * Exchange declarations
 * Event serialization
 * Persistent message metadata
@@ -1454,6 +1712,11 @@ The messaging unit tests verify:
 * Negative acknowledgements
 * Duplicate event handling
 * Resource shutdown and reconnection
+* Stale connection cleanup
+* Subscription-channel acknowledgement safety
+* Supervisor initialization state
+* Supervisor recovery after readiness loss
+* Initialization retry behaviour
 
 These tests do not replace RabbitMQ integration tests.
 
@@ -1469,7 +1732,7 @@ The structure follows three responsibilities:
 
 * `app.ts` creates the Express application and registers its HTTP routes without listening on a fixed port.
 * Event-consuming services use dedicated handler modules to coordinate domain logic, event publication and logging.
-* `index.ts` acts as the composition root and owns environment variables, concrete RabbitMQ adapters, subscriptions, port binding and process signals.
+* `index.ts` acts as the composition root and owns environment variables, concrete RabbitMQ adapters, supervisor configuration, subscriptions, port binding and process signals.
 
 The Order Service receives its work through HTTP rather than a RabbitMQ subscription. Its `app.ts` therefore receives an injected `OrderCreatedPublisher` instead of using a message-consumer handler.
 
@@ -1477,12 +1740,73 @@ This separation provides several benefits:
 
 * HTTP behaviour can be tested without starting the complete service process.
 * Tests can bind Express to an available dynamic port.
+* Readiness can be tested through an injected readiness probe.
 * Event handlers can use fake publishers and recording loggers.
 * RabbitMQ routing keys remain infrastructure details in the composition root.
 * Importing application code does not automatically connect to RabbitMQ or terminate the process.
 * Business and coordination behaviour can be validated independently of process lifecycle concerns.
 
 The result is a clearer boundary between application behaviour and runtime infrastructure.
+
+---
+
+### Why separate liveness and readiness?
+
+A process can be running correctly even when one of its external dependencies is temporarily unavailable.
+
+Treating those two states as the same thing would make it difficult for infrastructure and operators to distinguish between:
+
+```text
+The process has failed
+```
+
+and:
+
+```text
+The process is alive but temporarily unable to perform its RabbitMQ workload
+```
+
+CommerceFlow therefore uses:
+
+```text
+/health
+```
+
+for process liveness and:
+
+```text
+/ready
+```
+
+for RabbitMQ-dependent workload readiness.
+
+This also allows a service to stay alive while RabbitMQ is unavailable and recover automatically when the broker becomes available again.
+
+---
+
+### Why a RabbitMQ supervisor?
+
+A fixed number of connection attempts during process startup is not sufficient for runtime resilience.
+
+RabbitMQ can become unavailable after a service has already started.
+
+The `RabbitMqSupervisor` therefore owns the recurring dependency-initialization lifecycle.
+
+For the Order Service, the supervised initialization establishes the RabbitMQ connection.
+
+For consumer services, the supervised initialization recreates the complete subscription.
+
+The supervisor reports ready only when:
+
+```text
+Service-specific initialization completed
+                AND
+RabbitMqClient is still ready
+```
+
+If readiness is lost, the supervisor can run the initialization again.
+
+This allows the service process to remain alive during a broker outage and recover without a process restart.
 
 ---
 
@@ -1531,20 +1855,30 @@ The current implementation does not yet include:
 
 * Persistent business data
 * Durable idempotency
+* Transactional coordination between business state and event publication
+* Transactional outbox
+* Transactional inbox
 * Real payment integration
 * Real carrier integration
 * Real email, SMS or push notifications
 * Authentication
 * Authorization
 * Rate limiting
-* Transactional outbox
 * Event schema versioning
 * Distributed tracing
 * Centralized metrics
 * Centralized log aggregation
 * Retry queues with delayed retries
+* Automated dead-letter replay
 * Production secret management
+* Docker images for the application services
 * Kubernetes deployment
+
+The RabbitMQ recovery mechanism also remains intentionally simpler than a full production messaging platform.
+
+For example, connection initialization is not currently cancellation-aware and concurrent connection attempts are not explicitly serialized through a shared in-flight connection promise.
+
+The current inventory implementation also changes its in-memory stock before publishing the resulting event. Without transactional persistence and an outbox, a publication failure can therefore create consistency risks that a production implementation would need to solve.
 
 ---
 
@@ -1588,16 +1922,17 @@ A future version should define rules for:
 
 ### Observability
 
-A production-oriented version should include:
+CommerceFlow already includes structured JSON logging and RabbitMQ-aware readiness checks.
 
-* Structured JSON logging
+A more production-oriented observability setup should extend this with:
+
 * OpenTelemetry
 * Distributed traces
 * Service metrics
 * Queue depth monitoring
 * Dead-letter alerts
-* Readiness checks
-* Dependency-aware health checks
+* Centralized log aggregation
+* Readiness aggregation across additional critical dependencies
 
 ---
 
@@ -1636,7 +1971,11 @@ A deployed environment should include:
 * [x] Queue-specific dead-letter handling
 * [x] In-memory idempotent message handling
 * [x] Health endpoints for all services
+* [x] Dependency-aware RabbitMQ readiness endpoints
+* [x] Background RabbitMQ recovery supervision
+* [x] RabbitMQ recovery without service restart
 * [x] Docker Compose environment
+* [x] RabbitMQ Docker health check
 * [x] Type checking
 * [x] Workspace builds
 * [x] Unit tests for all service business logic
@@ -1644,24 +1983,28 @@ A deployed environment should include:
 * [x] Event-handler component tests for all consuming services
 * [x] HTTP setup separated from process startup
 * [x] Unit tests for the shared RabbitMQ client
+* [x] Unit tests for the RabbitMQ supervisor
 * [x] RabbitMQ integration test against a real broker
 * [x] RabbitMQ integration testing in GitHub Actions
 * [x] Complete successful workflow end-to-end test
 * [x] Complete failed inventory workflow end-to-end test
+* [x] RabbitMQ recovery end-to-end test
 * [x] End-to-end testing in GitHub Actions
 * [x] GitHub Actions validation
 * [x] Node.js 20 and 22 CI matrix
 * [x] Dependency vulnerability remediation
 * [x] Runtime request validation with Zod
 * [x] Structured JSON logging across messaging and all services
+* [x] Subscription-channel acknowledgement safety after reconnect
 
 ### Next improvements
 
-* [ ] Add dependency-aware readiness endpoints
 * [ ] Add persistent inventory storage
 * [ ] Add persistent notification storage
 * [ ] Add persistent idempotency records
 * [ ] Add retry queues with controlled delays
+* [ ] Serialize concurrent RabbitMQ connection attempts
+* [ ] Add cancellation-aware RabbitMQ initialization
 
 ### Advanced reliability
 
@@ -1680,7 +2023,7 @@ A deployed environment should include:
 * [ ] Add distributed tracing
 * [ ] Add Prometheus metrics
 * [ ] Add Grafana dashboards
-* [ ] Add container health checks
+* [ ] Add application service container health checks
 * [ ] Add Dockerfiles for all services
 * [ ] Add Kubernetes manifests
 * [ ] Add deployment documentation
@@ -1701,10 +2044,10 @@ npm install
 npm ci
 ```
 
-### Start RabbitMQ
+### Start RabbitMQ and wait for health
 
 ```powershell
-docker compose up -d
+docker compose up -d --wait rabbitmq
 ```
 
 ### View RabbitMQ status
@@ -1773,7 +2116,7 @@ npm run typecheck
 npm run build
 ```
 
-### Run all unit tests
+### Run all unit and component tests
 
 ```powershell
 npm test
@@ -1787,12 +2130,28 @@ RabbitMQ must be running locally before this command is executed.
 npm run test:integration
 ```
 
-### Run complete end-to-end workflow test
+### Run all end-to-end tests
 
-RabbitMQ must be running locally. The test starts and stops all five services automatically.
+RabbitMQ should initially be running through the repository's Docker Compose environment.
+
+The workflow test runs first. The recovery test then stops and restarts RabbitMQ automatically.
 
 ```powershell
 npm run test:e2e
+```
+
+### Run workflow end-to-end test only
+
+```powershell
+npm run test:e2e:workflow
+```
+
+### Run RabbitMQ recovery end-to-end test only
+
+The recovery test controls RabbitMQ through Docker Compose and restores it during cleanup.
+
+```powershell
+npm run test:e2e:recovery
 ```
 
 ### Run Messaging unit tests
@@ -1859,10 +2218,40 @@ Restart RabbitMQ:
 
 ```powershell
 docker compose down
-docker compose up -d
+docker compose up -d --wait rabbitmq
 ```
 
-Services retry their RabbitMQ connection automatically during startup.
+Services supervise RabbitMQ in the background.
+
+They can remain alive while RabbitMQ is unavailable and automatically attempt to reconnect and reinitialize their RabbitMQ dependency when the broker becomes available again.
+
+While RabbitMQ is unavailable, `/health` can remain HTTP `200` while `/ready` reports HTTP `503`.
+
+---
+
+### A service is healthy but not ready
+
+Check:
+
+```powershell
+Invoke-RestMethod -Uri "http://localhost:3001/health"
+```
+
+and:
+
+```powershell
+curl.exe -i http://localhost:3001/ready
+```
+
+A healthy but unready service generally means that the process itself is running but its RabbitMQ dependency has not completed initialization.
+
+Check RabbitMQ:
+
+```powershell
+docker compose ps
+```
+
+and inspect service and RabbitMQ logs if readiness does not recover automatically.
 
 ---
 
@@ -1890,11 +2279,12 @@ Check:
 
 1. Whether all five services are running.
 2. Whether RabbitMQ is available.
-3. Whether the expected queues have been declared.
-4. Whether the queues have the correct routing-key bindings.
-5. Whether the consumer logs contain a processing error.
-6. Whether the message was moved to a dead-letter queue.
-7. Whether the event payload matches the shared contract.
+3. Whether the relevant services report `/ready` as ready.
+4. Whether the expected queues have been declared.
+5. Whether the queues have the correct routing-key bindings.
+6. Whether the consumer logs contain a processing error.
+7. Whether the message was moved to a dead-letter queue.
+8. Whether the event payload matches the shared contract.
 
 ---
 
@@ -1930,15 +2320,22 @@ CommerceFlow demonstrates practical experience with:
 * Handling failed messages through dead-letter queues
 * Planning for duplicate message delivery
 * Separating infrastructure from business behaviour
+* Separating process liveness from dependency readiness
+* Designing background dependency recovery
+* Reconnecting and recreating RabbitMQ subscriptions
+* Preserving subscription-channel semantics during reconnect
 * Separating HTTP application setup, event handling and process startup
 * Testing Express applications on dynamic local ports
 * Testing event handlers with injected publishers and loggers
 * Applying dependency injection to infrastructure code
 * Testing retry and failure behaviour deterministically
 * Testing message acknowledgements and dead-letter decisions
+* Testing RabbitMQ recovery without restarting service processes
 * Creating independently running services in a monorepo
+* Using Docker Compose to manage test infrastructure
 * Using GitHub Actions for repeatable validation
 * Identifying the differences between unit, integration and end-to-end tests
+* Identifying the differences between liveness and readiness
 * Identifying the differences between a demonstration and a production system
 
 ---
@@ -1949,21 +2346,29 @@ CommerceFlow is under active development as a portfolio and architectural learni
 
 The current version demonstrates a complete event-driven workflow from order creation through payment, inventory, delivery and customer notification.
 
-Service business logic, HTTP applications, event handlers, the shared messaging client and the shared logging package are covered by 58 unit and component tests.
+Service business logic, HTTP applications, event handlers, the shared messaging client, RabbitMQ supervisor and shared logging package are covered by **80 unit and component tests**.
 
 A RabbitMQ integration test verifies publishing, routing, consumption and message metadata against a real broker.
 
-A complete end-to-end test starts all five services and verifies both the successful delivery workflow and the failed inventory workflow through public HTTP endpoints and RabbitMQ.
+The workflow end-to-end test starts all five services and verifies both the successful delivery workflow and failed inventory workflow through public HTTP endpoints and RabbitMQ.
 
-Unit, integration and end-to-end tests run automatically in GitHub Actions on Node.js 20 and 22.
+A separate RabbitMQ recovery end-to-end test verifies that all five services remain alive and report themselves unready while RabbitMQ is unavailable, then automatically recover their readiness and process a complete workflow when RabbitMQ becomes available again without restarting the service processes.
 
-All five services now separate HTTP application construction from process startup. Event-consuming services also isolate their message coordination in dedicated, dependency-injected handler modules.
+Unit, integration and both end-to-end tests run automatically in GitHub Actions on Node.js 20 and 22.
+
+All five services separate HTTP application construction from process startup.
+
+Event-consuming services also isolate their message coordination in dedicated, dependency-injected handler modules.
 
 The Order Service validates incoming `POST /orders` payloads at runtime with a Zod schema before passing typed data into the business service.
 
 Messaging and all five services use the shared structured logger to emit JSON logs with service, event and workflow context such as event identifiers, order identifiers and correlation identifiers.
 
-Future iterations will focus on dependency-aware readiness checks, durable persistence, observability and stronger delivery guarantees.
+The shared messaging layer now tracks RabbitMQ connection readiness, supervises runtime initialization, automatically retries after dependency loss and recreates consumer subscriptions after RabbitMQ recovery.
+
+The project deliberately remains an architectural demonstration rather than a production-ready commerce platform.
+
+Future iterations will focus on durable persistence, observability, transactional consistency and stronger delivery guarantees.
 
 ---
 
