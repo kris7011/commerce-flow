@@ -740,6 +740,174 @@ test(
 );
 
 test(
+    "acknowledges an in-flight message on its original channel after reconnect",
+    async () => {
+        const firstChannel =
+            new FakeChannel();
+
+        const firstConnection =
+            new FakeConnection(
+                firstChannel
+            );
+
+        const secondChannel =
+            new FakeChannel();
+
+        const secondConnection =
+            new FakeConnection(
+                secondChannel
+            );
+
+        const connections = [
+            firstConnection,
+            secondConnection
+        ];
+
+        let connectCalls =
+            0;
+
+        const client =
+            new RabbitMqClient(
+                "amqp://test",
+                "commerce.events",
+                {},
+                {
+                    connect:
+                        async () => {
+                            const connection =
+                                connections[
+                                connectCalls
+                                ];
+
+                            connectCalls +=
+                                1;
+
+                            assert.ok(
+                                connection
+                            );
+
+                            return connection;
+                        },
+
+                    sleep:
+                        async () =>
+                            undefined,
+
+                    logger:
+                        silentLogger
+                }
+            );
+
+        let releaseHandler:
+            (() => void) | undefined;
+
+        const handlerGate =
+            new Promise<void>(
+                resolve => {
+                    releaseHandler =
+                        resolve;
+                }
+            );
+
+        let markHandlerStarted:
+            (() => void) | undefined;
+
+        const handlerStarted =
+            new Promise<void>(
+                resolve => {
+                    markHandlerStarted =
+                        resolve;
+                }
+            );
+
+        await client
+            .subscribe<TestEvent>(
+                "test-service.test-events",
+                [
+                    "test.event"
+                ],
+                async () => {
+                    markHandlerStarted?.();
+
+                    await handlerGate;
+                }
+            );
+
+        const firstConsumer =
+            getSingleConsumer(
+                firstChannel
+            );
+
+        const message =
+            createMessage(
+                createTestEvent()
+            );
+
+        const consumePromise =
+            Promise.resolve(
+                firstConsumer(
+                    message
+                )
+            );
+
+        await handlerStarted;
+
+        firstChannel
+            .triggerClose();
+
+        assert.equal(
+            client.isReady(),
+            false
+        );
+
+        await client.connect();
+
+        assert.equal(
+            client.isReady(),
+            true
+        );
+
+        assert.equal(
+            connectCalls,
+            2
+        );
+
+        releaseHandler?.();
+
+        await consumePromise;
+
+        assert.deepEqual(
+            firstChannel
+                .acknowledgedMessages,
+            [
+                message
+            ]
+        );
+
+        assert.equal(
+            secondChannel
+                .acknowledgedMessages
+                .length,
+            0
+        );
+
+        assert.equal(
+            firstChannel
+                .nackedMessages
+                .length,
+            0
+        );
+
+        assert.equal(
+            secondChannel
+                .nackedMessages
+                .length,
+            0
+        );
+    }
+);
+
+test(
     "nacks messages without requeueing when the handler fails",
     async () => {
         const channel =

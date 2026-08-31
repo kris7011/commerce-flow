@@ -380,6 +380,9 @@ export class RabbitMqClient {
             );
         }
 
+        const channel =
+            this.channel;
+
         const deadLetterExchangeName =
             `${this.exchangeName}` +
             `.dead-letter`;
@@ -392,7 +395,7 @@ export class RabbitMqClient {
             `${queueName}` +
             `.dead-letter`;
 
-        await this.channel
+        await channel
             .assertExchange(
                 deadLetterExchangeName,
                 "topic",
@@ -401,7 +404,7 @@ export class RabbitMqClient {
                 }
             );
 
-        await this.channel
+        await channel
             .assertQueue(
                 deadLetterQueueName,
                 {
@@ -409,14 +412,14 @@ export class RabbitMqClient {
                 }
             );
 
-        await this.channel
+        await channel
             .bindQueue(
                 deadLetterQueueName,
                 deadLetterExchangeName,
                 deadLetterRoutingKey
             );
 
-        await this.channel
+        await channel
             .assertQueue(
                 queueName,
                 {
@@ -434,7 +437,7 @@ export class RabbitMqClient {
             const routingKey
             of routingKeys
         ) {
-            await this.channel
+            await channel
                 .bindQueue(
                     queueName,
                     this.exchangeName,
@@ -442,7 +445,7 @@ export class RabbitMqClient {
                 );
         }
 
-        await this.channel
+        await channel
             .consume(
                 queueName,
                 async message => {
@@ -483,10 +486,9 @@ export class RabbitMqClient {
                                 }
                             );
 
-                            this.channel
-                                ?.ack(
-                                    message
-                                );
+                            channel.ack(
+                                message
+                            );
 
                             return;
                         }
@@ -502,10 +504,9 @@ export class RabbitMqClient {
                                 eventId
                             );
 
-                        this.channel
-                            ?.ack(
-                                message
-                            );
+                        channel.ack(
+                            message
+                        );
                     } catch (error) {
                         this.logger.error(
                             "Failed to process message",
@@ -516,12 +517,11 @@ export class RabbitMqClient {
                             }
                         );
 
-                        this.channel
-                            ?.nack(
-                                message,
-                                false,
-                                false
-                            );
+                        channel.nack(
+                            message,
+                            false,
+                            false
+                        );
                     }
                 }
             );
