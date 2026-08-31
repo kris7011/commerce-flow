@@ -64,7 +64,7 @@ jobs:
             - name: Run RabbitMQ integration tests
               run: npm run test:integration
 
-            - name: Run complete end-to-end workflow test
+            - name: Run end-to-end tests
               run: npm run test:e2e
 
             - name: Stop RabbitMQ
