@@ -111,6 +111,9 @@ export class RabbitMqClient {
     private channel:
         RabbitMqChannel | null = null;
 
+    private connectPromise:
+        Promise<void> | null = null;
+
     private readonly processedEventIdsByQueueName =
         new Map<
             string,
@@ -164,6 +167,37 @@ export class RabbitMqClient {
     }
 
     async connect(): Promise<void> {
+        if (this.channel) {
+            return;
+        }
+
+        if (this.connectPromise) {
+            await this.connectPromise;
+
+            return;
+        }
+
+        const connectPromise =
+            this.connectWithRetry();
+
+        this.connectPromise =
+            connectPromise;
+
+        try {
+            await connectPromise;
+        } finally {
+            if (
+                this.connectPromise ===
+                connectPromise
+            ) {
+                this.connectPromise =
+                    null;
+            }
+        }
+    }
+
+    private async connectWithRetry():
+        Promise<void> {
         if (this.channel) {
             return;
         }

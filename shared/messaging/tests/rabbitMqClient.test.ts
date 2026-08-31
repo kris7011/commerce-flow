@@ -98,6 +98,98 @@ test(
 );
 
 test(
+    "shares one in-flight connection attempt across concurrent callers",
+    async () => {
+        const channel =
+            new FakeChannel();
+
+        const connection =
+            new FakeConnection(
+                channel
+            );
+
+        let connectCalls =
+            0;
+
+        let releaseConnection:
+            () => void =
+            () => undefined;
+
+        const connectionGate =
+            new Promise<void>(
+                resolve => {
+                    releaseConnection =
+                        resolve;
+                }
+            );
+
+        const client =
+            createClient(
+                connection,
+                {},
+                {
+                    connect:
+                        async () => {
+                            connectCalls +=
+                                1;
+
+                            await connectionGate;
+
+                            return connection;
+                        }
+                }
+            );
+
+        const firstConnect =
+            client.connect();
+
+        const secondConnect =
+            client.connect();
+
+        assert.equal(
+            connectCalls,
+            1
+        );
+
+        assert.equal(
+            connection
+                .createChannelCalls,
+            0
+        );
+
+        releaseConnection();
+
+        await Promise.all([
+            firstConnect,
+            secondConnect
+        ]);
+
+        assert.equal(
+            connectCalls,
+            1
+        );
+
+        assert.equal(
+            connection
+                .createChannelCalls,
+            1
+        );
+
+        assert.equal(
+            channel
+                .assertExchangeCalls
+                .length,
+            1
+        );
+
+        assert.equal(
+            client.isReady(),
+            true
+        );
+    }
+);
+
+test(
     "reports readiness across the connection lifecycle",
     async () => {
         const channel =
