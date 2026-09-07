@@ -1319,13 +1319,13 @@ All five services, the shared messaging client, RabbitMQ supervisor and shared l
 | Workspace            |  Tests | Covered behaviour                                                                                                                                                                                                  |
 | -------------------- | -----: | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Logging              |      5 | JSON serialization, log levels, error serialization, child loggers and inherited context                                                                                                                           |
-| Messaging            |     23 | Connection lifecycle and retry, readiness, publishing, queue and dead-letter topology, acknowledgements, duplicate handling, reconnection, supervisor recovery, subscription-channel safety and structured logging |
+| Messaging            |     24 | Connection lifecycle and retry, readiness, publishing, queue and dead-letter topology, acknowledgements, duplicate handling, reconnection, supervisor recovery, subscription-channel safety and structured logging |
 | Order Service        |     13 | Zod request validation, correlation identifiers, totals, event creation, health and readiness endpoints, publishing and structured request logging                                                                 |
 | Payment Service      |      8 | Payment event creation, data preservation, health and readiness endpoints, structured event coordination and publisher failure propagation                                                                         |
 | Inventory Service    |     11 | Reservation rules, health, readiness and stock endpoints, structured success and failure logging and publisher failure propagation                                                                                 |
 | Delivery Service     |      9 | Delivery creation, date calculation, health and readiness endpoints, structured event coordination, workflow identifiers and publisher failure propagation                                                         |
 | Notification Service |     11 | Notification creation, defensive copies, health, readiness and notification endpoints, both event-handler paths and structured logging                                                                             |
-| **Total**            | **80** |                                                                                                                                                                                                                    |
+| **Total**            | **81** |                                                                                                                                                                                                                    |
 
 These tests do not require RabbitMQ or separately running service processes.
 
@@ -1996,6 +1996,7 @@ A deployed environment should include:
 * [x] Runtime request validation with Zod
 * [x] Structured JSON logging across messaging and all services
 * [x] Subscription-channel acknowledgement safety after reconnect
+* [x] Serialized concurrent RabbitMQ connection attempts
 
 ### Next improvements
 
@@ -2346,7 +2347,7 @@ CommerceFlow is under active development as a portfolio and architectural learni
 
 The current version demonstrates a complete event-driven workflow from order creation through payment, inventory, delivery and customer notification.
 
-Service business logic, HTTP applications, event handlers, the shared messaging client, RabbitMQ supervisor and shared logging package are covered by **80 unit and component tests**.
+Service business logic, HTTP applications, event handlers, the shared messaging client, RabbitMQ supervisor and shared logging package are covered by **81 unit and component tests**.
 
 A RabbitMQ integration test verifies publishing, routing, consumption and message metadata against a real broker.
 
