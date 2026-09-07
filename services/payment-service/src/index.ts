@@ -67,14 +67,15 @@ const supervisorController =
 const rabbitMqSupervisor =
     new RabbitMqSupervisor(
         rabbitMq,
-        async () => {
+        async signal => {
             await rabbitMq
                 .subscribe<OrderCreatedEvent>(
                     "payment-service.order-created",
                     [
                         "order.created"
                     ],
-                    handleOrderCreated
+                    handleOrderCreated,
+                    signal
                 );
         },
         {},

@@ -67,7 +67,7 @@ const supervisorController =
 const rabbitMqSupervisor =
     new RabbitMqSupervisor(
         rabbitMq,
-        async () => {
+        async signal => {
             await rabbitMq
                 .subscribe<InventoryReservedEvent>(
                     "delivery-service." +
@@ -75,7 +75,8 @@ const rabbitMqSupervisor =
                     [
                         "inventory.reserved"
                     ],
-                    handleInventoryReserved
+                    handleInventoryReserved,
+                    signal
                 );
         },
         {},

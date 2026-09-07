@@ -52,7 +52,7 @@ const supervisorController =
 const rabbitMqSupervisor =
     new RabbitMqSupervisor(
         rabbitMq,
-        async () => {
+        async signal => {
             await rabbitMq
                 .subscribe<NotificationEvent>(
                     "notification-service." +
@@ -61,7 +61,8 @@ const rabbitMqSupervisor =
                         "delivery.booked",
                         "inventory.reservation.failed"
                     ],
-                    handleNotificationEvent
+                    handleNotificationEvent,
+                    signal
                 );
         },
         {},

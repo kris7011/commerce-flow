@@ -466,6 +466,189 @@ test(
 );
 
 test(
+    "cleans up an in-flight connection when initialization is aborted",
+    async () => {
+        const channel =
+            new FakeChannel();
+
+        const connection =
+            new FakeConnection(
+                channel
+            );
+
+        const controller =
+            new AbortController();
+
+        let releaseConnection:
+            (() => void) | undefined;
+
+        const connectionGate =
+            new Promise<void>(
+                resolve => {
+                    releaseConnection =
+                        resolve;
+                }
+            );
+
+        let connectionStarted:
+            (() => void) | undefined;
+
+        const connectionStartedGate =
+            new Promise<void>(
+                resolve => {
+                    connectionStarted =
+                        resolve;
+                }
+            );
+
+        const client =
+            createClient(
+                connection,
+                {},
+                {
+                    connect:
+                        async () => {
+                            connectionStarted?.();
+
+                            await connectionGate;
+
+                            return connection;
+                        }
+                }
+            );
+
+        const connectPromise =
+            client.connect(
+                controller.signal
+            );
+
+        await connectionStartedGate;
+
+        controller.abort();
+
+        releaseConnection?.();
+
+        await assert.rejects(
+            async () => {
+                await connectPromise;
+            },
+            {
+                name:
+                    "AbortError",
+                message:
+                    "RabbitMQ initialization aborted."
+            }
+        );
+
+        assert.equal(
+            connection
+                .closeCalls,
+            1
+        );
+
+        assert.equal(
+            connection
+                .createChannelCalls,
+            0
+        );
+
+        assert.equal(
+            client.isReady(),
+            false
+        );
+    }
+);
+
+test(
+    "stops retrying when initialization is aborted during the retry delay",
+    async () => {
+        const controller =
+            new AbortController();
+
+        let connectionAttempts =
+            0;
+
+        let receivedSignal:
+            AbortSignal | undefined;
+
+        const client =
+            new RabbitMqClient(
+                "amqp://test",
+                "commerce.events",
+                {
+                    maxConnectionRetries:
+                        5,
+                    retryDelayInMs:
+                        25
+                },
+                {
+                    connect:
+                        async () => {
+                            connectionAttempts +=
+                                1;
+
+                            throw new Error(
+                                "Broker unavailable"
+                            );
+                        },
+
+                    sleep:
+                        async (
+                            _milliseconds,
+                            signal
+                        ) => {
+                            receivedSignal =
+                                signal;
+
+                            controller.abort();
+                        },
+
+                    logger:
+                        silentLogger
+                }
+            );
+
+        await assert.rejects(
+            async () => {
+                await client.connect(
+                    controller.signal
+                );
+            },
+            {
+                name:
+                    "AbortError",
+                message:
+                    "RabbitMQ initialization aborted."
+            }
+        );
+
+        assert.equal(
+            connectionAttempts,
+            1
+        );
+
+        assert.ok(
+            receivedSignal
+        );
+
+        assert.equal(
+            receivedSignal.aborted,
+            true
+        );
+
+        assert.equal(
+            controller.signal.aborted,
+            true
+        );
+
+        assert.equal(
+            client.isReady(),
+            false
+        );
+    }
+);
+
+test(
     "throws after all connection attempts fail",
     async () => {
         let connectionAttempts =

@@ -46,7 +46,9 @@ export class RabbitMqSupervisor {
         private readonly client:
             RabbitMqReadinessClient,
         private readonly initialize:
-            () => Promise<void>,
+            (
+                signal: AbortSignal
+            ) => Promise<void>,
         options:
             RabbitMqSupervisorOptions = {},
         dependencies:
@@ -95,7 +97,9 @@ export class RabbitMqSupervisor {
                 false;
 
             try {
-                await this.initialize();
+                await this.initialize(
+                    signal
+                );
 
                 if (signal.aborted) {
                     return;

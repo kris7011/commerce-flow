@@ -455,6 +455,61 @@ test(
 );
 
 test(
+    "passes the run abort signal to initialization",
+    async () => {
+        const client =
+            new FakeReadinessClient(
+                false
+            );
+
+        const controller =
+            new AbortController();
+
+        let receivedSignal:
+            AbortSignal | undefined;
+
+        const supervisor =
+            new RabbitMqSupervisor(
+                client,
+                async signal => {
+                    receivedSignal =
+                        signal;
+
+                    controller.abort();
+                },
+                {},
+                {
+                    logger:
+                        silentLogger,
+
+                    sleep:
+                        async () =>
+                            undefined
+                }
+            );
+
+        await supervisor.run(
+            controller.signal
+        );
+
+        assert.equal(
+            receivedSignal,
+            controller.signal
+        );
+
+        assert.equal(
+            receivedSignal?.aborted,
+            true
+        );
+
+        assert.equal(
+            supervisor.isReady(),
+            false
+        );
+    }
+);
+
+test(
     "stops without initializing when already aborted",
     async () => {
         const client =

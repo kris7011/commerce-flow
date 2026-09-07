@@ -54,8 +54,10 @@ const supervisorController =
 const rabbitMqSupervisor =
     new RabbitMqSupervisor(
         rabbitMq,
-        async () => {
-            await rabbitMq.connect();
+        async signal => {
+            await rabbitMq.connect(
+                signal
+            );
         },
         {},
         {

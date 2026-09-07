@@ -93,7 +93,8 @@ export interface RabbitMqClientDependencies {
     ): Promise<RabbitMqConnection>;
 
     sleep(
-        milliseconds: number
+        milliseconds: number,
+        signal?: AbortSignal
     ): Promise<void>;
 
     logger: RabbitMqLogger;
@@ -113,6 +114,9 @@ export class RabbitMqClient {
 
     private connectPromise:
         Promise<void> | null = null;
+
+    private connectAbortController:
+        AbortController | null = null;
 
     private readonly processedEventIdsByQueueName =
         new Map<
@@ -166,19 +170,42 @@ export class RabbitMqClient {
         );
     }
 
-    async connect(): Promise<void> {
+    async connect(
+        signal?: AbortSignal
+    ): Promise<void> {
+        throwIfAborted(
+            signal
+        );
+
         if (this.channel) {
             return;
         }
 
         if (this.connectPromise) {
-            await this.connectPromise;
+            await waitForPromiseOrAbort(
+                this.connectPromise,
+                signal
+            );
 
             return;
         }
 
+        const controller =
+            new AbortController();
+
+        const removeAbortForwarding =
+            forwardAbortSignal(
+                signal,
+                controller
+            );
+
+        this.connectAbortController =
+            controller;
+
         const connectPromise =
-            this.connectWithRetry();
+            this.connectWithRetry(
+                controller.signal
+            );
 
         this.connectPromise =
             connectPromise;
@@ -186,6 +213,8 @@ export class RabbitMqClient {
         try {
             await connectPromise;
         } finally {
+            removeAbortForwarding();
+
             if (
                 this.connectPromise ===
                 connectPromise
@@ -193,17 +222,30 @@ export class RabbitMqClient {
                 this.connectPromise =
                     null;
             }
+
+            if (
+                this.connectAbortController ===
+                controller
+            ) {
+                this.connectAbortController =
+                    null;
+            }
         }
     }
 
-    private async connectWithRetry():
-        Promise<void> {
+    private async connectWithRetry(
+        signal: AbortSignal
+    ): Promise<void> {
+        throwIfAborted(
+            signal
+        );
+
         if (this.channel) {
             return;
         }
 
         if (this.connection) {
-            await this.close();
+            await this.closeResources();
         }
 
         const maxConnectionRetries =
@@ -224,6 +266,10 @@ export class RabbitMqClient {
             maxConnectionRetries;
             attempt += 1
         ) {
+            throwIfAborted(
+                signal
+            );
+
             try {
                 const connection =
                     await this
@@ -233,6 +279,10 @@ export class RabbitMqClient {
 
                 this.connection =
                     connection;
+
+                throwIfAborted(
+                    signal
+                );
 
                 connection.onClose(
                     () => {
@@ -266,6 +316,10 @@ export class RabbitMqClient {
                 this.channel =
                     channel;
 
+                throwIfAborted(
+                    signal
+                );
+
                 channel.onClose(
                     () => {
                         if (
@@ -297,6 +351,10 @@ export class RabbitMqClient {
                         }
                     );
 
+                throwIfAborted(
+                    signal
+                );
+
                 this.logger.info(
                     "Connected to RabbitMQ exchange",
                     {
@@ -310,6 +368,13 @@ export class RabbitMqClient {
                 lastError =
                     error;
 
+                await this
+                    .closeResources();
+
+                if (signal.aborted) {
+                    throw createAbortError();
+                }
+
                 this.logger.warn(
                     "RabbitMQ connection attempt failed",
                     {
@@ -322,14 +387,17 @@ export class RabbitMqClient {
                     }
                 );
 
-                await this.close();
-
                 if (
                     attempt <
                     maxConnectionRetries
                 ) {
                     await this.delay(
-                        retryDelayInMs
+                        retryDelayInMs,
+                        signal
+                    );
+
+                    throwIfAborted(
+                        signal
                     );
                 }
             }
@@ -404,9 +472,16 @@ export class RabbitMqClient {
             event: TEvent,
             message:
                 ConsumeMessage
-        ) => Promise<void>
+        ) => Promise<void>,
+        signal?: AbortSignal
     ): Promise<void> {
-        await this.connect();
+        await this.connect(
+            signal
+        );
+
+        throwIfAborted(
+            signal
+        );
 
         if (!this.channel) {
             throw new Error(
@@ -438,6 +513,10 @@ export class RabbitMqClient {
                 }
             );
 
+        throwIfAborted(
+            signal
+        );
+
         await channel
             .assertQueue(
                 deadLetterQueueName,
@@ -446,12 +525,20 @@ export class RabbitMqClient {
                 }
             );
 
+        throwIfAborted(
+            signal
+        );
+
         await channel
             .bindQueue(
                 deadLetterQueueName,
                 deadLetterExchangeName,
                 deadLetterRoutingKey
             );
+
+        throwIfAborted(
+            signal
+        );
 
         await channel
             .assertQueue(
@@ -467,6 +554,10 @@ export class RabbitMqClient {
                 }
             );
 
+        throwIfAborted(
+            signal
+        );
+
         for (
             const routingKey
             of routingKeys
@@ -477,6 +568,10 @@ export class RabbitMqClient {
                     this.exchangeName,
                     routingKey
                 );
+
+            throwIfAborted(
+                signal
+            );
         }
 
         await channel
@@ -560,6 +655,10 @@ export class RabbitMqClient {
                 }
             );
 
+        throwIfAborted(
+            signal
+        );
+
         this.logger.info(
             "Subscribed queue",
             {
@@ -580,6 +679,14 @@ export class RabbitMqClient {
     }
 
     async close(): Promise<void> {
+        this.connectAbortController
+            ?.abort();
+
+        await this.closeResources();
+    }
+
+    private async closeResources():
+        Promise<void> {
         const channel =
             this.channel;
 
@@ -792,13 +899,186 @@ async function connectToRabbitMq(
 }
 
 function sleep(
-    milliseconds: number
+    milliseconds: number,
+    signal?: AbortSignal
 ): Promise<void> {
+    if (!signal) {
+        return new Promise(
+            resolve => {
+                setTimeout(
+                    resolve,
+                    milliseconds
+                );
+            }
+        );
+    }
+
+    if (signal.aborted) {
+        return Promise.resolve();
+    }
+
     return new Promise(
         resolve => {
-            setTimeout(
-                resolve,
-                milliseconds
+            const onAbort =
+                (): void => {
+                    clearTimeout(
+                        timeout
+                    );
+
+                    signal
+                        .removeEventListener(
+                            "abort",
+                            onAbort
+                        );
+
+                    resolve();
+                };
+
+            const timeout =
+                setTimeout(
+                    () => {
+                        signal
+                            .removeEventListener(
+                                "abort",
+                                onAbort
+                            );
+
+                        resolve();
+                    },
+                    milliseconds
+                );
+
+            signal.addEventListener(
+                "abort",
+                onAbort,
+                {
+                    once: true
+                }
+            );
+        }
+    );
+}
+
+function throwIfAborted(
+    signal?: AbortSignal
+): void {
+    if (!signal?.aborted) {
+        return;
+    }
+
+    throw createAbortError();
+}
+
+function createAbortError():
+    Error {
+    const error =
+        new Error(
+            "RabbitMQ initialization aborted."
+        );
+
+    error.name =
+        "AbortError";
+
+    return error;
+}
+
+function forwardAbortSignal(
+    source:
+        AbortSignal | undefined,
+    target:
+        AbortController
+): () => void {
+    if (!source) {
+        return () =>
+            undefined;
+    }
+
+    if (source.aborted) {
+        target.abort();
+
+        return () =>
+            undefined;
+    }
+
+    const onAbort =
+        (): void => {
+            target.abort();
+        };
+
+    source.addEventListener(
+        "abort",
+        onAbort,
+        {
+            once: true
+        }
+    );
+
+    return () => {
+        source.removeEventListener(
+            "abort",
+            onAbort
+        );
+    };
+}
+
+function waitForPromiseOrAbort(
+    promise: Promise<void>,
+    signal?: AbortSignal
+): Promise<void> {
+    if (!signal) {
+        return promise;
+    }
+
+    if (signal.aborted) {
+        return Promise.reject(
+            createAbortError()
+        );
+    }
+
+    return new Promise(
+        (
+            resolve,
+            reject
+        ) => {
+            const cleanup =
+                (): void => {
+                    signal
+                        .removeEventListener(
+                            "abort",
+                            onAbort
+                        );
+                };
+
+            const onAbort =
+                (): void => {
+                    cleanup();
+
+                    reject(
+                        createAbortError()
+                    );
+                };
+
+            signal.addEventListener(
+                "abort",
+                onAbort,
+                {
+                    once: true
+                }
+            );
+
+            promise.then(
+                () => {
+                    cleanup();
+
+                    resolve();
+                },
+                error => {
+                    cleanup();
+
+                    reject(
+                        error
+                    );
+                }
             );
         }
     );

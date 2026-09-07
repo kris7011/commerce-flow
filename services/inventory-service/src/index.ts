@@ -99,7 +99,7 @@ const supervisorController =
 const rabbitMqSupervisor =
     new RabbitMqSupervisor(
         rabbitMq,
-        async () => {
+        async signal => {
             await rabbitMq
                 .subscribe<PaymentAuthorizedEvent>(
                     "inventory-service." +
@@ -107,7 +107,8 @@ const rabbitMqSupervisor =
                     [
                         "payment.authorized"
                     ],
-                    handlePaymentAuthorized
+                    handlePaymentAuthorized,
+                    signal
                 );
         },
         {},
