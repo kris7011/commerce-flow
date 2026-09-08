@@ -849,6 +849,7 @@ Business behaviour remains inside the individual services.
 * Connection retry
 * Background dependency supervision
 * Automatic reconnect and subscription reinitialization
+* Cancellation-aware RabbitMQ initialization and retry delays
 
 ### Logging
 
@@ -1319,13 +1320,13 @@ All five services, the shared messaging client, RabbitMQ supervisor and shared l
 | Workspace            |  Tests | Covered behaviour                                                                                                                                                                                                  |
 | -------------------- | -----: | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Logging              |      5 | JSON serialization, log levels, error serialization, child loggers and inherited context                                                                                                                           |
-| Messaging            |     24 | Connection lifecycle and retry, readiness, publishing, queue and dead-letter topology, acknowledgements, duplicate handling, reconnection, supervisor recovery, subscription-channel safety and structured logging |
+| Messaging            |     27 | Connection lifecycle and retry, readiness, publishing, queue and dead-letter topology, acknowledgements, duplicate handling, reconnection, supervisor recovery, subscription-channel safety and structured logging |
 | Order Service        |     13 | Zod request validation, correlation identifiers, totals, event creation, health and readiness endpoints, publishing and structured request logging                                                                 |
 | Payment Service      |      8 | Payment event creation, data preservation, health and readiness endpoints, structured event coordination and publisher failure propagation                                                                         |
 | Inventory Service    |     11 | Reservation rules, health, readiness and stock endpoints, structured success and failure logging and publisher failure propagation                                                                                 |
 | Delivery Service     |      9 | Delivery creation, date calculation, health and readiness endpoints, structured event coordination, workflow identifiers and publisher failure propagation                                                         |
 | Notification Service |     11 | Notification creation, defensive copies, health, readiness and notification endpoints, both event-handler paths and structured logging                                                                             |
-| **Total**            | **81** |                                                                                                                                                                                                                    |
+| **Total**            | **84** |                                                                                                                                                                                                                    |
 
 These tests do not require RabbitMQ or separately running service processes.
 
@@ -1497,7 +1498,7 @@ RabbitMQ is controlled through Docker Compose during this test and is restored t
 npm audit
 ```
 
-The repository currently uses a patched `body-parser` dependency and should report no known vulnerabilities for the installed dependency tree.
+The repository pins the patched transitive `qs` dependency through the root npm `overrides` configuration, and `npm audit` should report no known vulnerabilities for the installed dependency tree.
 
 ---
 
@@ -1660,6 +1661,7 @@ The messaging workspace centralizes:
 * Background RabbitMQ supervision
 * Reconnection
 * Subscription reinitialization
+* Cancellation-aware initialization
 * Connection shutdown
 
 This avoids duplicating the same infrastructure code in every service.
@@ -1876,7 +1878,7 @@ The current implementation does not yet include:
 
 The RabbitMQ recovery mechanism also remains intentionally simpler than a full production messaging platform.
 
-For example, connection initialization is not currently cancellation-aware and concurrent connection attempts are not explicitly serialized through a shared in-flight connection promise.
+RabbitMQ initialization and retry delays are cancellation-aware. The underlying `amqplib.connect()` operation itself does not receive the supervisor AbortSignal, so if shutdown occurs while that broker connection promise is still pending, cleanup completes after the connection attempt settles.
 
 The current inventory implementation also changes its in-memory stock before publishing the resulting event. Without transactional persistence and an outbox, a publication failure can therefore create consistency risks that a production implementation would need to solve.
 
@@ -1997,6 +1999,7 @@ A deployed environment should include:
 * [x] Structured JSON logging across messaging and all services
 * [x] Subscription-channel acknowledgement safety after reconnect
 * [x] Serialized concurrent RabbitMQ connection attempts
+* [x] Cancellation-aware RabbitMQ initialization
 
 ### Next improvements
 
@@ -2004,8 +2007,6 @@ A deployed environment should include:
 * [ ] Add persistent notification storage
 * [ ] Add persistent idempotency records
 * [ ] Add retry queues with controlled delays
-* [ ] Serialize concurrent RabbitMQ connection attempts
-* [ ] Add cancellation-aware RabbitMQ initialization
 
 ### Advanced reliability
 
@@ -2347,7 +2348,7 @@ CommerceFlow is under active development as a portfolio and architectural learni
 
 The current version demonstrates a complete event-driven workflow from order creation through payment, inventory, delivery and customer notification.
 
-Service business logic, HTTP applications, event handlers, the shared messaging client, RabbitMQ supervisor and shared logging package are covered by **81 unit and component tests**.
+Service business logic, HTTP applications, event handlers, the shared messaging client, RabbitMQ supervisor and shared logging package are covered by **84 unit and component tests**.
 
 A RabbitMQ integration test verifies publishing, routing, consumption and message metadata against a real broker.
 
@@ -2365,7 +2366,7 @@ The Order Service validates incoming `POST /orders` payloads at runtime with a Z
 
 Messaging and all five services use the shared structured logger to emit JSON logs with service, event and workflow context such as event identifiers, order identifiers and correlation identifiers.
 
-The shared messaging layer now tracks RabbitMQ connection readiness, supervises runtime initialization, automatically retries after dependency loss and recreates consumer subscriptions after RabbitMQ recovery.
+The shared messaging layer now tracks RabbitMQ connection readiness, supervises runtime initialization, serializes concurrent connection attempts, propagates shutdown cancellation through initialization and automatically recreates consumer subscriptions after RabbitMQ recovery.
 
 The project deliberately remains an architectural demonstration rather than a production-ready commerce platform.
 
