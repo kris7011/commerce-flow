@@ -1532,6 +1532,8 @@ Set up Node.js
     ↓
 npm ci
     ↓
+npm audit --audit-level=moderate
+    ↓
 npm run typecheck
     ↓
 npm run build
@@ -1551,6 +1553,7 @@ The jobs use:
 
 * Read-only repository permissions
 * npm dependency caching
+* Dependency vulnerability auditing
 * RabbitMQ managed through Docker Compose
 * Health-gated RabbitMQ startup through Docker Compose
 * A ten-minute timeout
