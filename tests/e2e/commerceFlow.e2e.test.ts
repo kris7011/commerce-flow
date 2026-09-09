@@ -29,9 +29,18 @@ interface RunningService {
     readonly standardError: string[];
 }
 
-interface HealthResponse {
-    status: string;
+interface ReadinessResponse {
+    status:
+    | "Ready"
+    | "NotReady";
+
     service: string;
+
+    dependencies: {
+        rabbitMq:
+        | "Ready"
+        | "NotReady";
+    };
 }
 
 interface CreatedOrderResponse {
@@ -154,7 +163,7 @@ test(
                     runningService
                 );
 
-                await waitForServiceHealth(
+                await waitForServiceReadiness(
                     runningService,
                     20_000
                 );
@@ -409,19 +418,20 @@ function startService(
     };
 }
 
-async function waitForServiceHealth(
+async function waitForServiceReadiness(
     runningService: RunningService,
     timeoutInMs: number
 ): Promise<void> {
     const deadline =
         Date.now() + timeoutInMs;
 
-    let lastError: unknown;
+    let lastStatus =
+        "No response";
 
-    const healthUrl =
+    const readinessUrl =
         `http://127.0.0.1:` +
         `${runningService.definition.port}` +
-        `/health`;
+        `/ready`;
 
     while (Date.now() < deadline) {
         if (
@@ -431,26 +441,33 @@ async function waitForServiceHealth(
         ) {
             throw new Error(
                 `${runningService.definition.name} ` +
-                `exited before becoming healthy.`
+                `exited before becoming ready.`
             );
         }
 
         try {
             const response =
-                await fetch(healthUrl);
+                await fetch(readinessUrl);
 
-            if (response.ok) {
-                const health =
-                    await response.json() as HealthResponse;
+            const readiness =
+                await response.json() as
+                ReadinessResponse;
 
-                if (
-                    health.status === "Healthy"
-                ) {
-                    return;
-                }
+            lastStatus =
+                `HTTP ${response.status}: ` +
+                `${JSON.stringify(readiness)}`;
+
+            if (
+                response.status === 200 &&
+                readiness.status === "Ready" &&
+                readiness.dependencies.rabbitMq ===
+                "Ready"
+            ) {
+                return;
             }
         } catch (error) {
-            lastError = error;
+            lastStatus =
+                getErrorMessage(error);
         }
 
         await delay(200);
@@ -459,8 +476,8 @@ async function waitForServiceHealth(
     throw new Error(
         `Timed out while waiting for ` +
         `${runningService.definition.name} ` +
-        `at ${healthUrl}. ` +
-        `Last error: ${getErrorMessage(lastError)}`
+        `to become ready at ${readinessUrl}. ` +
+        `Last status: ${lastStatus}`
     );
 }
 
