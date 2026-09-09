@@ -2,14 +2,26 @@ import type {
     OrderItem
 } from "@commerce-flow/contracts";
 
-export interface InventoryRepository {
-    getAvailableQuantity(
-        productId: string
-    ): Promise<number>;
+export interface UnavailableInventoryItem {
+    readonly productId: string;
+    readonly requestedQuantity: number;
+    readonly availableQuantity: number;
+}
 
-    reserve(
+export type InventoryReservationResult =
+    | {
+        readonly status: "Reserved";
+    }
+    | {
+        readonly status: "InsufficientStock";
+        readonly unavailableItems:
+        readonly UnavailableInventoryItem[];
+    };
+
+export interface InventoryRepository {
+    tryReserve(
         items: readonly OrderItem[]
-    ): Promise<void>;
+    ): Promise<InventoryReservationResult>;
 
     getAllStock(): Promise<
         Readonly<Record<string, number>>

@@ -2,7 +2,9 @@ import type {
     OrderItem
 } from "@commerce-flow/contracts";
 import type {
-    InventoryRepository
+    InventoryRepository,
+    InventoryReservationResult,
+    UnavailableInventoryItem
 } from "./inventoryRepository.js";
 
 export class InMemoryInventoryRepository
@@ -20,25 +22,49 @@ export class InMemoryInventoryRepository
             );
     }
 
-    async getAvailableQuantity(
-        productId: string
-    ): Promise<number> {
-        return (
-            this.stockByProductId
-                .get(productId) ??
-            0
-        );
-    }
-
-    async reserve(
+    async tryReserve(
         items: readonly OrderItem[]
-    ): Promise<void> {
+    ): Promise<InventoryReservationResult> {
         const requestedQuantityByProductId =
             aggregateQuantities(items);
 
-        this.ensureStockIsAvailable(
+        const unavailableItems:
+            UnavailableInventoryItem[] = [];
+
+        for (
+            const [
+                productId,
+                requestedQuantity
+            ] of
             requestedQuantityByProductId
-        );
+        ) {
+            const availableQuantity =
+                this.stockByProductId
+                    .get(productId) ??
+                0;
+
+            if (
+                availableQuantity <
+                requestedQuantity
+            ) {
+                unavailableItems.push({
+                    productId,
+                    requestedQuantity,
+                    availableQuantity
+                });
+            }
+        }
+
+        if (
+            unavailableItems.length >
+            0
+        ) {
+            return {
+                status:
+                    "InsufficientStock",
+                unavailableItems
+            };
+        }
 
         for (
             const [
@@ -58,6 +84,11 @@ export class InMemoryInventoryRepository
                 requestedQuantity
             );
         }
+
+        return {
+            status:
+                "Reserved"
+        };
     }
 
     async getAllStock(): Promise<
@@ -66,35 +97,6 @@ export class InMemoryInventoryRepository
         return Object.fromEntries(
             this.stockByProductId
         );
-    }
-
-    private ensureStockIsAvailable(
-        requestedQuantityByProductId:
-            ReadonlyMap<string, number>
-    ): void {
-        for (
-            const [
-                productId,
-                requestedQuantity
-            ] of
-            requestedQuantityByProductId
-        ) {
-            const availableQuantity =
-                this.stockByProductId
-                    .get(productId) ??
-                0;
-
-            if (
-                availableQuantity <
-                requestedQuantity
-            ) {
-                throw new Error(
-                    `Cannot reserve product '${productId}'. ` +
-                    `Requested quantity: ${requestedQuantity}. ` +
-                    `Available quantity: ${availableQuantity}.`
-                );
-            }
-        }
     }
 }
 
