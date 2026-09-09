@@ -1390,6 +1390,8 @@ npm run test:e2e:workflow
 
 The workflow test starts all five services as independent Node.js processes and uses a real RabbitMQ broker.
 
+Before submitting an order, the test waits until every service reports HTTP `200` from `/ready` with RabbitMQ marked as `Ready`. This prevents the workflow from starting while HTTP processes are alive but their RabbitMQ connections or subscriptions are still initializing.
+
 The test interacts with the system only through its public HTTP endpoints:
 
 * `POST /orders` starts the workflow.
