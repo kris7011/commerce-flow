@@ -16,7 +16,7 @@ const fixedTime = "2026-07-31T08:00:00.000Z";
 
 test(
     "reserves all requested items when sufficient stock is available",
-    () => {
+    async () => {
         const repository = new InMemoryInventoryRepository({
             "washing-machine-01": 10,
             "dishwasher-01": 5
@@ -38,7 +38,10 @@ test(
         ]);
 
         const result =
-            service.processPaymentAuthorized(sourceEvent);
+            await service
+                .processPaymentAuthorized(
+                    sourceEvent
+                );
 
         assertInventoryReserved(result);
 
@@ -61,7 +64,7 @@ test(
             sourceEvent.data.items
         );
 
-        assert.deepEqual(repository.getAllStock(), {
+        assert.deepEqual(await repository.getAllStock(), {
             "washing-machine-01": 8,
             "dishwasher-01": 4
         });
@@ -70,7 +73,7 @@ test(
 
 test(
     "does not reserve any stock when one product is unavailable",
-    () => {
+    async () => {
         const repository = new InMemoryInventoryRepository({
             "washing-machine-01": 10,
             "dryer-01": 3
@@ -92,7 +95,10 @@ test(
         ]);
 
         const result =
-            service.processPaymentAuthorized(sourceEvent);
+            await service
+                .processPaymentAuthorized(
+                    sourceEvent
+                );
 
         assertInventoryReservationFailed(result);
 
@@ -120,7 +126,7 @@ test(
             }
         ]);
 
-        assert.deepEqual(repository.getAllStock(), {
+        assert.deepEqual(await repository.getAllStock(), {
             "washing-machine-01": 10,
             "dryer-01": 3
         });
@@ -129,7 +135,7 @@ test(
 
 test(
     "combines duplicate order lines before checking availability",
-    () => {
+    async () => {
         const repository = new InMemoryInventoryRepository({
             "washing-machine-01": 10
         });
@@ -150,7 +156,10 @@ test(
         ]);
 
         const result =
-            service.processPaymentAuthorized(sourceEvent);
+            await service
+                .processPaymentAuthorized(
+                    sourceEvent
+                );
 
         assertInventoryReservationFailed(result);
 
@@ -162,7 +171,7 @@ test(
             }
         ]);
 
-        assert.deepEqual(repository.getAllStock(), {
+        assert.deepEqual(await repository.getAllStock(), {
             "washing-machine-01": 10
         });
     }
@@ -170,7 +179,7 @@ test(
 
 test(
     "treats an unknown product as having zero available stock",
-    () => {
+    async () => {
         const repository = new InMemoryInventoryRepository({
             "washing-machine-01": 10
         });
@@ -186,7 +195,10 @@ test(
         ]);
 
         const result =
-            service.processPaymentAuthorized(sourceEvent);
+            await service
+                .processPaymentAuthorized(
+                    sourceEvent
+                );
 
         assertInventoryReservationFailed(result);
 
@@ -198,7 +210,7 @@ test(
             }
         ]);
 
-        assert.deepEqual(repository.getAllStock(), {
+        assert.deepEqual(await repository.getAllStock(), {
             "washing-machine-01": 10
         });
     }

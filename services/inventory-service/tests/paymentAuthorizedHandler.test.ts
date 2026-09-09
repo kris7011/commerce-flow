@@ -90,7 +90,7 @@ test(
         );
 
         assert.deepEqual(
-            repository.getAllStock(),
+            await repository.getAllStock(),
             {
                 "washing-machine-01": 8,
                 "dishwasher-01": 5,
@@ -220,7 +220,7 @@ test(
         );
 
         assert.deepEqual(
-            repository.getAllStock(),
+            await repository.getAllStock(),
             {
                 "washing-machine-01": 10,
                 "dishwasher-01": 5,
@@ -365,7 +365,7 @@ test(
         );
 
         assert.deepEqual(
-            repository.getAllStock(),
+            await repository.getAllStock(),
             {
                 "washing-machine-01": 10,
                 "dishwasher-01": 5,

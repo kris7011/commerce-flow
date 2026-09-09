@@ -1,9 +1,17 @@
-import type { OrderItem } from "@commerce-flow/contracts";
+import type {
+    OrderItem
+} from "@commerce-flow/contracts";
 
 export interface InventoryRepository {
-    getAvailableQuantity(productId: string): number;
+    getAvailableQuantity(
+        productId: string
+    ): Promise<number>;
 
-    reserve(items: readonly OrderItem[]): void;
+    reserve(
+        items: readonly OrderItem[]
+    ): Promise<void>;
 
-    getAllStock(): Readonly<Record<string, number>>;
+    getAllStock(): Promise<
+        Readonly<Record<string, number>>
+    >;
 }

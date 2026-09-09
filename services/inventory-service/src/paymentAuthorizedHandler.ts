@@ -64,7 +64,7 @@ export function createPaymentAuthorizedHandler(
         );
 
         const resultEvent =
-            inventoryService
+            await inventoryService
                 .processPaymentAuthorized(
                     event
                 );

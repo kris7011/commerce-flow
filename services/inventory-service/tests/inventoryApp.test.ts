@@ -180,7 +180,7 @@ test(
         const repository =
             createRepository();
 
-        repository.reserve([
+        await repository.reserve([
             {
                 productId:
                     "washing-machine-01",

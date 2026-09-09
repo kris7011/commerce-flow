@@ -37,10 +37,13 @@ export class InventoryService {
             dependencies.getCurrentTime ?? (() => new Date().toISOString());
     }
 
-    processPaymentAuthorized(
+    async processPaymentAuthorized(
         event: PaymentAuthorizedEvent
-    ): InventoryResultEvent {
-        const unavailableItems = this.findUnavailableItems(event.data.items);
+    ): Promise<InventoryResultEvent> {
+        const unavailableItems =
+            await this.findUnavailableItems(
+                event.data.items
+            );
 
         if (unavailableItems.length > 0) {
             return this.createReservationFailedEvent(
@@ -49,29 +52,50 @@ export class InventoryService {
             );
         }
 
-        this.repository.reserve(event.data.items);
+        await this.repository.reserve(
+            event.data.items
+        );
 
-        return this.createInventoryReservedEvent(event);
+        return this.createInventoryReservedEvent(
+            event
+        );
     }
 
-    private findUnavailableItems(
+    private async findUnavailableItems(
         items: readonly OrderItem[]
-    ): UnavailableItem[] {
+    ): Promise<UnavailableItem[]> {
         const requestedQuantityByProductId =
             aggregateQuantities(items);
 
-        return Array.from(requestedQuantityByProductId.entries())
-            .map(([productId, requestedQuantity]) => {
-                return {
+        const unavailableItems:
+            UnavailableItem[] = [];
+
+        for (
+            const [
+                productId,
+                requestedQuantity
+            ] of
+            requestedQuantityByProductId
+        ) {
+            const availableQuantity =
+                await this.repository
+                    .getAvailableQuantity(
+                        productId
+                    );
+
+            if (
+                availableQuantity <
+                requestedQuantity
+            ) {
+                unavailableItems.push({
                     productId,
                     requestedQuantity,
-                    availableQuantity:
-                        this.repository.getAvailableQuantity(productId)
-                };
-            })
-            .filter(item => {
-                return item.availableQuantity < item.requestedQuantity;
-            });
+                    availableQuantity
+                });
+            }
+        }
+
+        return unavailableItems;
     }
 
     private createInventoryReservedEvent(
