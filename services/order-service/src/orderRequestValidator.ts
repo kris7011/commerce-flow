@@ -14,7 +14,9 @@ const orderItemSchema =
             nonBlankStringSchema,
 
         quantity:
-            z.number().positive(),
+            z.number()
+                .int()
+                .positive(),
 
         unitPrice:
             z.number().nonnegative()

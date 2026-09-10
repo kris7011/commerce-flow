@@ -134,6 +134,12 @@ test(
                 {
                     productId:
                         "product-001",
+                    quantity: 1.5,
+                    unitPrice: 100
+                },
+                {
+                    productId:
+                        "product-001",
                     quantity:
                         Number.NaN,
                     unitPrice: 100
