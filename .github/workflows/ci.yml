@@ -61,15 +61,15 @@ jobs:
             - name: Run workspace unit tests
               run: npm test
 
-            - name: Start RabbitMQ
-              run: docker compose up -d --wait rabbitmq
+            - name: Start integration dependencies
+              run: docker compose up -d --wait rabbitmq postgres
 
-            - name: Run RabbitMQ integration tests
+            - name: Run integration tests
               run: npm run test:integration
 
             - name: Run end-to-end tests
               run: npm run test:e2e
 
-            - name: Stop RabbitMQ
+            - name: Stop integration dependencies
               if: always()
               run: docker compose down
