@@ -13,14 +13,19 @@ export interface InventoryStockReader {
 }
 
 export interface ReadinessProbe {
-    isReady(): boolean;
+    isReady():
+        boolean |
+        Promise<boolean>;
 }
 
 export interface InventoryAppDependencies {
     readonly stockReader:
     InventoryStockReader;
 
-    readonly readinessProbe:
+    readonly rabbitMqReadinessProbe:
+    ReadinessProbe;
+
+    readonly databaseReadinessProbe:
     ReadinessProbe;
 }
 
@@ -30,7 +35,8 @@ export function createInventoryApp(
 ): Express {
     const {
         stockReader,
-        readinessProbe
+        rabbitMqReadinessProbe,
+        databaseReadinessProbe
     } = dependencies;
 
     const app = express();
@@ -50,31 +56,49 @@ export function createInventoryApp(
 
     app.get(
         "/ready",
-        (
+        async (
             _request: Request,
             response: Response
         ) => {
-            const rabbitMqReady =
-                readinessProbe.isReady();
+            const [
+                rabbitMqReady,
+                databaseReady
+            ] =
+                await Promise.all([
+                    getProbeReadiness(
+                        rabbitMqReadinessProbe
+                    ),
+                    getProbeReadiness(
+                        databaseReadinessProbe
+                    )
+                ]);
 
-            const status =
-                rabbitMqReady
-                    ? "Ready"
-                    : "NotReady";
+            const ready =
+                rabbitMqReady &&
+                databaseReady;
 
             return response
                 .status(
-                    rabbitMqReady
+                    ready
                         ? 200
                         : 503
                 )
                 .json({
-                    status,
+                    status:
+                        ready
+                            ? "Ready"
+                            : "NotReady",
                     service:
                         "inventory-service",
                     dependencies: {
                         rabbitMq:
-                            status
+                            toReadinessStatus(
+                                rabbitMqReady
+                            ),
+                        database:
+                            toReadinessStatus(
+                                databaseReady
+                            )
                     }
                 });
         }
@@ -102,4 +126,22 @@ export function createInventoryApp(
     );
 
     return app;
+}
+
+async function getProbeReadiness(
+    probe: ReadinessProbe
+): Promise<boolean> {
+    try {
+        return await probe.isReady();
+    } catch {
+        return false;
+    }
+}
+
+function toReadinessStatus(
+    ready: boolean
+): "Ready" | "NotReady" {
+    return ready
+        ? "Ready"
+        : "NotReady";
 }

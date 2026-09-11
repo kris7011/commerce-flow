@@ -9,11 +9,14 @@ import {
     RabbitMqSupervisor
 } from "@commerce-flow/messaging";
 import {
-    createInventoryApp
+    createInventoryApp,
+    type ReadinessProbe
 } from "./app.js";
 import {
-    InMemoryInventoryRepository
-} from "./inMemoryInventoryRepository.js";
+    createInventoryDatabasePool,
+    initializeInventoryDatabase,
+    isInventoryDatabaseReady
+} from "./database.js";
 import {
     InventoryService
 } from "./inventoryService.js";
@@ -21,6 +24,9 @@ import {
     createPaymentAuthorizedHandler,
     type InventoryResultPublisher
 } from "./paymentAuthorizedHandler.js";
+import {
+    PostgresInventoryRepository
+} from "./postgresInventoryRepository.js";
 
 const port =
     Number(
@@ -33,13 +39,6 @@ const rabbitMqUrl =
     process.env.RABBITMQ_URL ??
     "amqp://guest:guest@localhost:5672";
 
-const initialStock:
-    Readonly<Record<string, number>> = {
-    "washing-machine-01": 10,
-    "dishwasher-01": 5,
-    "dryer-01": 3
-};
-
 const logger =
     createStructuredLogger(
         "inventory-service"
@@ -50,9 +49,12 @@ const rabbitMq =
         rabbitMqUrl
     );
 
+const databasePool =
+    createInventoryDatabasePool();
+
 const inventoryRepository =
-    new InMemoryInventoryRepository(
-        initialStock
+    new PostgresInventoryRepository(
+        databasePool
     );
 
 const inventoryService =
@@ -117,15 +119,30 @@ const rabbitMqSupervisor =
         }
     );
 
+const databaseReadinessProbe:
+    ReadinessProbe = {
+    async isReady(): Promise<boolean> {
+        return isInventoryDatabaseReady(
+            databasePool
+        );
+    }
+};
+
 const app =
     createInventoryApp({
         stockReader:
             inventoryRepository,
-        readinessProbe:
-            rabbitMqSupervisor
+        rabbitMqReadinessProbe:
+            rabbitMqSupervisor,
+        databaseReadinessProbe
     });
 
-function start(): void {
+async function start():
+    Promise<void> {
+    await initializeInventoryDatabase(
+        databasePool
+    );
+
     app.listen(
         port,
         () => {
@@ -153,20 +170,73 @@ function start(): void {
         });
 }
 
-start();
+void start()
+    .catch(
+        async error => {
+            logger.error(
+                "Service failed to start",
+                error,
+                {
+                    port
+                }
+            );
 
-process.on(
+            supervisorController.abort();
+
+            await Promise.allSettled([
+                rabbitMq.close(),
+                databasePool.end()
+            ]);
+
+            process.exit(1);
+        }
+    );
+
+let shuttingDown =
+    false;
+
+async function shutdown(
+    signal: string
+): Promise<void> {
+    if (shuttingDown) {
+        return;
+    }
+
+    shuttingDown =
+        true;
+
+    logger.info(
+        "Service shutting down",
+        {
+            signal
+        }
+    );
+
+    supervisorController.abort();
+
+    await Promise.allSettled([
+        rabbitMq.close(),
+        databasePool.end()
+    ]);
+
+    process.exit(0);
+}
+
+process.once(
     "SIGINT",
-    async () => {
-        logger.info(
-            "Service shutting down"
+    () => {
+        void shutdown(
+            "SIGINT"
         );
+    }
+);
 
-        supervisorController.abort();
-
-        await rabbitMq.close();
-
-        process.exit(0);
+process.once(
+    "SIGTERM",
+    () => {
+        void shutdown(
+            "SIGTERM"
+        );
     }
 );
 

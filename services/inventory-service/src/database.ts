@@ -20,6 +20,24 @@ export function createInventoryDatabasePool(
     });
 }
 
+export async function isInventoryDatabaseReady(
+    pool: Pool
+): Promise<boolean> {
+    try {
+        await pool.query(
+            `
+                SELECT 1
+                FROM inventory_stock
+                LIMIT 1
+            `
+        );
+
+        return true;
+    } catch {
+        return false;
+    }
+}
+
 export async function initializeInventoryDatabase(
     pool: Pool
 ): Promise<void> {

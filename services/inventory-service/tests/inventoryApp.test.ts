@@ -41,7 +41,9 @@ test(
             createInventoryApp({
                 stockReader:
                     repository,
-                readinessProbe:
+                rabbitMqReadinessProbe:
+                    readyProbe,
+                databaseReadinessProbe:
                     readyProbe
             });
 
@@ -88,7 +90,9 @@ test(
             createInventoryApp({
                 stockReader:
                     repository,
-                readinessProbe:
+                rabbitMqReadinessProbe:
+                    readyProbe,
+                databaseReadinessProbe:
                     readyProbe
             });
 
@@ -117,6 +121,8 @@ test(
                             "inventory-service",
                         dependencies: {
                             rabbitMq:
+                                "Ready",
+                            database:
                                 "Ready"
                         }
                     }
@@ -136,8 +142,10 @@ test(
             createInventoryApp({
                 stockReader:
                     repository,
-                readinessProbe:
-                    notReadyProbe
+                rabbitMqReadinessProbe:
+                    notReadyProbe,
+                databaseReadinessProbe:
+                    readyProbe
             });
 
         await withTestServer(
@@ -165,7 +173,9 @@ test(
                             "inventory-service",
                         dependencies: {
                             rabbitMq:
-                                "NotReady"
+                                "NotReady",
+                            database:
+                                "Ready"
                         }
                     }
                 );
@@ -193,7 +203,9 @@ test(
             createInventoryApp({
                 stockReader:
                     repository,
-                readinessProbe:
+                rabbitMqReadinessProbe:
+                    readyProbe,
+                databaseReadinessProbe:
                     readyProbe
             });
 
@@ -229,6 +241,58 @@ test(
                                 5,
                             "dryer-01":
                                 3
+                        }
+                    }
+                );
+            }
+        );
+    }
+);
+
+test(
+    "returns not ready when PostgreSQL is unavailable",
+    async () => {
+        const repository =
+            createRepository();
+
+        const app =
+            createInventoryApp({
+                stockReader:
+                    repository,
+                rabbitMqReadinessProbe:
+                    readyProbe,
+                databaseReadinessProbe:
+                    notReadyProbe
+            });
+
+        await withTestServer(
+            app,
+            async baseUrl => {
+                const response =
+                    await fetch(
+                        `${baseUrl}/ready`
+                    );
+
+                assert.equal(
+                    response.status,
+                    503
+                );
+
+                const body =
+                    await response.json();
+
+                assert.deepEqual(
+                    body,
+                    {
+                        status:
+                            "NotReady",
+                        service:
+                            "inventory-service",
+                        dependencies: {
+                            rabbitMq:
+                                "Ready",
+                            database:
+                                "NotReady"
                         }
                     }
                 );
