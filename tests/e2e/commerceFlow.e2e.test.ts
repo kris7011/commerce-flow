@@ -14,6 +14,9 @@ import test from "node:test";
 import {
     fileURLToPath
 } from "node:url";
+import {
+    resetInventoryDatabase
+} from "./inventoryDatabaseFixture.js";
 
 interface ServiceDefinition {
     readonly name: string;
@@ -141,6 +144,18 @@ const serviceDefinitions:
                 "ORDER_SERVICE_PORT"
         }
     ];
+
+test.before(
+    () => {
+        resetInventoryDatabase();
+    }
+);
+
+test.after(
+    () => {
+        resetInventoryDatabase();
+    }
+);
 
 test(
     "processes successful and failed orders through the complete workflow",

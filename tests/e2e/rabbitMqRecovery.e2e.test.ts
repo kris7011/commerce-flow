@@ -18,6 +18,9 @@ import test from "node:test";
 import {
     fileURLToPath
 } from "node:url";
+import {
+    resetInventoryDatabase
+} from "./inventoryDatabaseFixture.js";
 
 interface ServiceDefinition {
     readonly name: string;
@@ -154,6 +157,18 @@ const serviceDefinitions:
                 "ORDER_SERVICE_PORT"
         }
     ];
+
+test.before(
+    () => {
+        resetInventoryDatabase();
+    }
+);
+
+test.after(
+    () => {
+        resetInventoryDatabase();
+    }
+);
 
 test(
     "recovers the complete workflow after RabbitMQ becomes available",
