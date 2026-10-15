@@ -12,6 +12,7 @@
     "shared/messaging",
     "shared/logging",
     "shared/testing",
+    "shared/runtime",
     "services/order-service",
     "services/payment-service",
     "services/inventory-service",
