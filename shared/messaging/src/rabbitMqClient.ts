@@ -532,10 +532,22 @@ export class RabbitMqClient {
             this.options.publishTimeoutInMs ??
             DEFAULTS.publishTimeoutInMs;
 
-        const timeoutSignal =
-            AbortSignal.timeout(
+        // A referenced timer (unlike AbortSignal.timeout) keeps the
+        // timeout reliable even when nothing else holds the event
+        // loop open while we wait for the confirm.
+        const timeoutController =
+            new AbortController();
+
+        const timeout =
+            setTimeout(
+                () => {
+                    timeoutController.abort();
+                },
                 publishTimeoutInMs
             );
+
+        const timeoutSignal =
+            timeoutController.signal;
 
         const signal =
             options.signal
@@ -604,6 +616,10 @@ export class RabbitMqClient {
                 {
                     cause: error
                 }
+            );
+        } finally {
+            clearTimeout(
+                timeout
             );
         }
 
