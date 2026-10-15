@@ -1,12 +1,43 @@
 import { randomUUID } from "node:crypto";
-import type {
-    DeliveryBookedEvent,
-    InventoryReservationFailedEvent
+import {
+    parseDeliveryBookedEvent,
+    parseInventoryReservationFailedEvent,
+    type DeliveryBookedEvent,
+    type InventoryReservationFailedEvent
 } from "@commerce-flow/contracts";
 
 export type NotificationEvent =
     | DeliveryBookedEvent
     | InventoryReservationFailedEvent;
+
+export function parseNotificationEvent(
+    value: unknown
+): NotificationEvent {
+    const eventType =
+        typeof value === "object" &&
+        value !== null &&
+        "eventType" in value
+            ? value.eventType
+            : undefined;
+
+    switch (eventType) {
+        case "DeliveryBooked":
+            return parseDeliveryBookedEvent(
+                value
+            );
+
+        case "InventoryReservationFailed":
+            return parseInventoryReservationFailedEvent(
+                value
+            );
+
+        default:
+            throw new Error(
+                `Unsupported notification event type: ` +
+                `${String(eventType)}`
+            );
+    }
+}
 
 export interface CustomerNotification {
     readonly notificationId: string;

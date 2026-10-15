@@ -1,4 +1,7 @@
 import {
+    ROUTING_KEYS
+} from "@commerce-flow/contracts";
+import {
     createStructuredLogger
 } from "@commerce-flow/logging";
 import {
@@ -13,7 +16,7 @@ import {
 } from "./notificationEventHandler.js";
 import {
     NotificationService,
-    type NotificationEvent
+    parseNotificationEvent
 } from "./notificationService.js";
 
 const port =
@@ -53,17 +56,19 @@ const rabbitMqSupervisor =
     new RabbitMqSupervisor(
         rabbitMq,
         async signal => {
-            await rabbitMq
-                .subscribe<NotificationEvent>(
-                    "notification-service." +
-                    "customer-events",
-                    [
-                        "delivery.booked",
-                        "inventory.reservation.failed"
-                    ],
+            await rabbitMq.subscribe({
+                queueName:
+                    "notification-service.customer-events",
+                routingKeys: [
+                    ROUTING_KEYS.DeliveryBooked,
+                    ROUTING_KEYS.InventoryReservationFailed
+                ],
+                parseEvent:
+                    parseNotificationEvent,
+                handler:
                     handleNotificationEvent,
-                    signal
-                );
+                signal
+            });
         },
         {},
         {

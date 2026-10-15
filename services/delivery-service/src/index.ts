@@ -1,5 +1,6 @@
-import type {
-    InventoryReservedEvent
+import {
+    ROUTING_KEYS,
+    parseInventoryReservedEvent
 } from "@commerce-flow/contracts";
 import {
     createStructuredLogger
@@ -68,16 +69,18 @@ const rabbitMqSupervisor =
     new RabbitMqSupervisor(
         rabbitMq,
         async signal => {
-            await rabbitMq
-                .subscribe<InventoryReservedEvent>(
-                    "delivery-service." +
-                    "inventory-reserved",
-                    [
-                        "inventory.reserved"
-                    ],
+            await rabbitMq.subscribe({
+                queueName:
+                    "delivery-service.inventory-reserved",
+                routingKeys: [
+                    ROUTING_KEYS.InventoryReserved
+                ],
+                parseEvent:
+                    parseInventoryReservedEvent,
+                handler:
                     handleInventoryReserved,
-                    signal
-                );
+                signal
+            });
         },
         {},
         {

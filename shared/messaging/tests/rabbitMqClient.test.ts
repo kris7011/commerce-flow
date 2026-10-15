@@ -4,12 +4,17 @@ import type {
     ConsumeMessage
 } from "amqplib";
 import {
+    PermanentMessageError,
+    PublishTimeoutError
+} from "../src/messageErrors.js";
+import {
     RabbitMqClient,
     type RabbitMqChannel,
     type RabbitMqClientDependencies,
     type RabbitMqClientOptions,
     type RabbitMqConnection,
-    type RabbitMqLogger
+    type RabbitMqLogger,
+    type RabbitMqPublishOptions
 } from "../src/rabbitMqClient.js";
 
 interface TestEvent {
@@ -788,7 +793,9 @@ test(
                 messageId:
                     "event-001",
                 correlationId:
-                    "correlation-001"
+                    "correlation-001",
+                type:
+                    "TestEvent"
             }
         );
     }
@@ -810,9 +817,8 @@ test(
                 connection
             );
 
-        await client
-            .subscribe<TestEvent>(
-                "test-service.test-events",
+        await subscribeTestHandler(
+                client,
                 [
                     "test.created",
                     "test.updated"
@@ -950,9 +956,8 @@ test(
         const handledEvents:
             TestEvent[] = [];
 
-        await client
-            .subscribe<TestEvent>(
-                "test-service.test-events",
+        await subscribeTestHandler(
+                client,
                 [
                     "test.event"
                 ],
@@ -1095,9 +1100,8 @@ test(
                 }
             );
 
-        await client
-            .subscribe<TestEvent>(
-                "test-service.test-events",
+        await subscribeTestHandler(
+                client,
                 [
                     "test.event"
                 ],
@@ -1183,7 +1187,7 @@ test(
 );
 
 test(
-    "nacks messages without requeueing when the handler fails",
+    "dead-letters messages after exhausting bounded handler retries",
     async () => {
         const channel =
             new FakeChannel();
@@ -1193,18 +1197,42 @@ test(
                 channel
             );
 
+        const delays:
+            number[] = [];
+
         const client =
             createClient(
-                connection
+                connection,
+                {
+                    handlerMaxAttempts:
+                        4,
+                    handlerRetryDelayInMs:
+                        100,
+                    handlerMaxRetryDelayInMs:
+                        300
+                },
+                {
+                    sleep:
+                        async milliseconds => {
+                            delays.push(
+                                milliseconds
+                            );
+                        }
+                }
             );
 
-        await client
-            .subscribe<TestEvent>(
-                "test-service.test-events",
+        let handlerCalls =
+            0;
+
+        await subscribeTestHandler(
+                client,
                 [
                     "test.event"
                 ],
                 async () => {
+                    handlerCalls +=
+                        1;
+
                     throw new Error(
                         "Handler failed"
                     );
@@ -1223,6 +1251,20 @@ test(
 
         await consume(
             message
+        );
+
+        assert.equal(
+            handlerCalls,
+            4
+        );
+
+        assert.deepEqual(
+            delays,
+            [
+                100,
+                200,
+                300
+            ]
         );
 
         assert.equal(
@@ -1267,9 +1309,8 @@ test(
         let handlerCalls =
             0;
 
-        await client
-            .subscribe<TestEvent>(
-                "test-service.test-events",
+        await subscribeTestHandler(
+                client,
                 [
                     "test.event"
                 ],
@@ -1421,6 +1462,8 @@ test(
                         "test.event",
                     eventId:
                         "event-001",
+                    eventType:
+                        "TestEvent",
                     correlationId:
                         "correlation-001"
                 }
@@ -1457,9 +1500,8 @@ test(
                 "Handler failed"
             );
 
-        await client
-            .subscribe<TestEvent>(
-                "test-service.test-events",
+        await subscribeTestHandler(
+                client,
                 [
                     "test.event"
                 ],
@@ -1496,11 +1538,39 @@ test(
                 context: {
                     queueName:
                         "test-service.test-events",
+                    eventId:
+                        "event-001",
+                    eventType:
+                        "TestEvent",
+                    correlationId:
+                        "correlation-001",
+                    redelivered:
+                        false,
+                    attempt:
+                        5,
+                    maxAttempts:
+                        5,
+                    permanent:
+                        false,
                     deadLetterQueueName:
                         "test-service.test-events" +
-                        ".dead-letter"
+                        ".dead-letter",
+                    action:
+                        "dead-letter"
                 }
             }
+        );
+
+        assert.equal(
+            logger
+                .warningLogs
+                .filter(
+                    entry =>
+                        entry.message ===
+                        "Retrying message after handler failure"
+                )
+                .length,
+            4
         );
     }
 );
@@ -1536,6 +1606,745 @@ function createClient(
     );
 }
 
+test(
+    "rejects publish when the broker nacks the message",
+    async () => {
+        const channel =
+            new FakeChannel();
+
+        channel.confirmPublication =
+            async () => {
+                throw new Error(
+                    "message nacked"
+                );
+            };
+
+        const logger =
+            new RecordingRabbitMqLogger();
+
+        const client =
+            createClient(
+                new FakeConnection(
+                    channel
+                ),
+                {},
+                {
+                    logger
+                }
+            );
+
+        await assert.rejects(
+            client.publish(
+                "test.event",
+                createTestEvent()
+            ),
+            {
+                message:
+                    "message nacked"
+            }
+        );
+
+        assert.equal(
+            logger.infoLogs.some(
+                entry =>
+                    entry.message ===
+                    "Published event"
+            ),
+            false
+        );
+    }
+);
+
+test(
+    "rejects publish with a timeout when no confirmation arrives",
+    async () => {
+        const channel =
+            new FakeChannel();
+
+        channel.confirmPublication =
+            () =>
+                new Promise<void>(
+                    () => undefined
+                );
+
+        const client =
+            createClient(
+                new FakeConnection(
+                    channel
+                ),
+                {
+                    publishTimeoutInMs:
+                        20
+                }
+            );
+
+        await assert.rejects(
+            client.publish(
+                "test.event",
+                createTestEvent()
+            ),
+            (error: unknown) => {
+                assert.ok(
+                    error instanceof
+                    PublishTimeoutError
+                );
+
+                assert.match(
+                    error.message,
+                    /did not confirm event event-001 within 20 ms/
+                );
+
+                return true;
+            }
+        );
+    }
+);
+
+test(
+    "rejects publish when the channel closes before confirmation",
+    async () => {
+        const channel =
+            new FakeChannel();
+
+        channel.confirmPublication =
+            async () => {
+                channel.triggerClose();
+
+                throw new Error(
+                    "channel closed"
+                );
+            };
+
+        const client =
+            createClient(
+                new FakeConnection(
+                    channel
+                )
+            );
+
+        await assert.rejects(
+            client.publish(
+                "test.event",
+                createTestEvent()
+            ),
+            {
+                message:
+                    "channel closed"
+            }
+        );
+
+        assert.equal(
+            client.isReady(),
+            false
+        );
+    }
+);
+
+test(
+    "limits unacknowledged deliveries with a configurable prefetch",
+    async () => {
+        const channel =
+            new FakeChannel();
+
+        const client =
+            createClient(
+                new FakeConnection(
+                    channel
+                ),
+                {
+                    prefetchCount:
+                        3
+                }
+            );
+
+        await subscribeTestHandler(
+            client,
+            [
+                "test.event"
+            ],
+            async () =>
+                undefined
+        );
+
+        assert.deepEqual(
+            channel.prefetchCalls,
+            [
+                3
+            ]
+        );
+    }
+);
+
+test(
+    "dead-letters permanent handler failures without retrying",
+    async () => {
+        const channel =
+            new FakeChannel();
+
+        const client =
+            createClient(
+                new FakeConnection(
+                    channel
+                )
+            );
+
+        let handlerCalls =
+            0;
+
+        await subscribeTestHandler(
+            client,
+            [
+                "test.event"
+            ],
+            async () => {
+                handlerCalls +=
+                    1;
+
+                throw new PermanentMessageError(
+                    "Unsupported business state"
+                );
+            }
+        );
+
+        const message =
+            createMessage(
+                createTestEvent()
+            );
+
+        await getSingleConsumer(
+            channel
+        )(
+            message
+        );
+
+        assert.equal(
+            handlerCalls,
+            1
+        );
+
+        assert.deepEqual(
+            channel.nackedMessages,
+            [
+                {
+                    message,
+                    allUpTo:
+                        false,
+                    requeue:
+                        false
+                }
+            ]
+        );
+    }
+);
+
+test(
+    "dead-letters messages whose body is not valid JSON",
+    async () => {
+        const channel =
+            new FakeChannel();
+
+        const logger =
+            new RecordingRabbitMqLogger();
+
+        const client =
+            createClient(
+                new FakeConnection(
+                    channel
+                ),
+                {},
+                {
+                    logger
+                }
+            );
+
+        let handlerCalls =
+            0;
+
+        await subscribeTestHandler(
+            client,
+            [
+                "test.event"
+            ],
+            async () => {
+                handlerCalls +=
+                    1;
+            }
+        );
+
+        const message =
+            createRawMessage(
+                "{not json"
+            );
+
+        await getSingleConsumer(
+            channel
+        )(
+            message
+        );
+
+        assert.equal(
+            handlerCalls,
+            0
+        );
+
+        assert.equal(
+            channel.nackedMessages.length,
+            1
+        );
+
+        assert.equal(
+            logger.errorLogs[0]?.message,
+            "Rejected malformed message"
+        );
+
+        assert.ok(
+            logger.errorLogs[0]?.error instanceof
+            PermanentMessageError
+        );
+    }
+);
+
+test(
+    "recovers from a transient handler failure on retry",
+    async () => {
+        const channel =
+            new FakeChannel();
+
+        const client =
+            createClient(
+                new FakeConnection(
+                    channel
+                )
+            );
+
+        let handlerCalls =
+            0;
+
+        await subscribeTestHandler(
+            client,
+            [
+                "test.event"
+            ],
+            async () => {
+                handlerCalls +=
+                    1;
+
+                if (handlerCalls < 3) {
+                    throw new Error(
+                        "Database temporarily unavailable"
+                    );
+                }
+            }
+        );
+
+        const message =
+            createMessage(
+                createTestEvent()
+            );
+
+        await getSingleConsumer(
+            channel
+        )(
+            message
+        );
+
+        assert.equal(
+            handlerCalls,
+            3
+        );
+
+        assert.deepEqual(
+            channel.acknowledgedMessages,
+            [
+                message
+            ]
+        );
+
+        assert.equal(
+            channel.nackedMessages.length,
+            0
+        );
+    }
+);
+
+test(
+    "leaves a message unsettled when its channel closes during a retry delay",
+    async () => {
+        const channel =
+            new FakeChannel();
+
+        const client =
+            createClient(
+                new FakeConnection(
+                    channel
+                ),
+                {},
+                {
+                    sleep:
+                        async () => {
+                            channel.triggerClose();
+                        }
+                }
+            );
+
+        let handlerCalls =
+            0;
+
+        await subscribeTestHandler(
+            client,
+            [
+                "test.event"
+            ],
+            async () => {
+                handlerCalls +=
+                    1;
+
+                throw new Error(
+                    "Transient failure"
+                );
+            }
+        );
+
+        await getSingleConsumer(
+            channel
+        )(
+            createMessage(
+                createTestEvent()
+            )
+        );
+
+        assert.equal(
+            handlerCalls,
+            1
+        );
+
+        assert.equal(
+            channel.acknowledgedMessages.length,
+            0
+        );
+
+        assert.equal(
+            channel.nackedMessages.length,
+            0
+        );
+    }
+);
+
+test(
+    "does not crash when acknowledging on a closed channel",
+    async () => {
+        const channel =
+            new FakeChannel();
+
+        channel.ack =
+            () => {
+                throw new Error(
+                    "Channel closed"
+                );
+            };
+
+        const logger =
+            new RecordingRabbitMqLogger();
+
+        const client =
+            createClient(
+                new FakeConnection(
+                    channel
+                ),
+                {},
+                {
+                    logger
+                }
+            );
+
+        await subscribeTestHandler(
+            client,
+            [
+                "test.event"
+            ],
+            async () =>
+                undefined
+        );
+
+        await getSingleConsumer(
+            channel
+        )(
+            createMessage(
+                createTestEvent()
+            )
+        );
+
+        assert.equal(
+            logger.warningLogs.some(
+                entry =>
+                    entry.message ===
+                    "Could not settle message on a closed channel"
+            ),
+            true
+        );
+    }
+);
+
+test(
+    "drains in-flight handlers and cancels consumers on close",
+    async () => {
+        const channel =
+            new FakeChannel();
+
+        const client =
+            new RabbitMqClient(
+                "amqp://test",
+                "commerce.events",
+                {},
+                {
+                    connect:
+                        async () =>
+                            new FakeConnection(
+                                channel
+                            ),
+
+                    // Never resolves: close() must wait for the
+                    // handler rather than for the drain timeout.
+                    sleep:
+                        () =>
+                            new Promise<void>(
+                                () => undefined
+                            ),
+
+                    logger:
+                        silentLogger
+                }
+            );
+
+        const events: string[] = [];
+
+        let releaseHandler:
+            () => void =
+            () => undefined;
+
+        let markStarted:
+            () => void =
+            () => undefined;
+
+        const handlerStarted =
+            new Promise<void>(
+                resolve => {
+                    markStarted =
+                        resolve;
+                }
+            );
+
+        await subscribeTestHandler(
+            client,
+            [
+                "test.event"
+            ],
+            async () => {
+                markStarted();
+
+                await new Promise<void>(
+                    resolve => {
+                        releaseHandler =
+                            resolve;
+                    }
+                );
+
+                events.push(
+                    "handler-finished"
+                );
+            }
+        );
+
+        const delivery =
+            Promise.resolve(
+                getSingleConsumer(
+                    channel
+                )(
+                    createMessage(
+                        createTestEvent()
+                    )
+                )
+            );
+
+        await handlerStarted;
+
+        const closing =
+            client
+                .close()
+                .then(
+                    () => {
+                        events.push(
+                            "closed"
+                        );
+                    }
+                );
+
+        await Promise.resolve();
+
+        assert.deepEqual(
+            channel.cancelledConsumerTags,
+            [
+                "fake-consumer"
+            ]
+        );
+
+        assert.equal(
+            channel.closeCalls,
+            0
+        );
+
+        releaseHandler();
+
+        await Promise.all([
+            delivery,
+            closing
+        ]);
+
+        assert.deepEqual(
+            events,
+            [
+                "handler-finished",
+                "closed"
+            ]
+        );
+
+        assert.equal(
+            channel.acknowledgedMessages.length,
+            1
+        );
+
+        assert.equal(
+            channel.closeCalls,
+            1
+        );
+    }
+);
+
+test(
+    "bounds the in-memory duplicate cache",
+    async () => {
+        const channel =
+            new FakeChannel();
+
+        const client =
+            createClient(
+                new FakeConnection(
+                    channel
+                ),
+                {
+                    recentEventIdCacheSize:
+                        1
+                }
+            );
+
+        const handledEventIds:
+            string[] = [];
+
+        await subscribeTestHandler(
+            client,
+            [
+                "test.event"
+            ],
+            async event => {
+                handledEventIds.push(
+                    event.eventId
+                );
+            }
+        );
+
+        const consume =
+            getSingleConsumer(
+                channel
+            );
+
+        for (
+            const eventId of [
+                "event-a",
+                "event-a",
+                "event-b",
+                "event-a"
+            ]
+        ) {
+            await consume(
+                createMessage({
+                    ...createTestEvent(),
+                    eventId
+                })
+            );
+        }
+
+        // event-b evicted event-a, so the last delivery is
+        // handled again. Handlers must be idempotent anyway.
+        assert.deepEqual(
+            handledEventIds,
+            [
+                "event-a",
+                "event-b",
+                "event-a"
+            ]
+        );
+    }
+);
+
+async function subscribeTestHandler(
+    client: RabbitMqClient,
+    routingKeys: string[],
+    handler: (
+        event: TestEvent,
+        message: ConsumeMessage
+    ) => Promise<void>
+): Promise<void> {
+    await client.subscribe<TestEvent>({
+        queueName:
+            "test-service.test-events",
+        routingKeys,
+        parseEvent:
+            parseTestEvent,
+        handler
+    });
+}
+
+function parseTestEvent(
+    value: unknown
+): TestEvent {
+    if (
+        typeof value !== "object" ||
+        value === null
+    ) {
+        throw new Error(
+            "Expected an object."
+        );
+    }
+
+    const candidate =
+        value as Partial<TestEvent>;
+
+    if (
+        typeof candidate.eventId !== "string" ||
+        candidate.eventId.length === 0 ||
+        candidate.eventType !== "TestEvent" ||
+        typeof candidate.correlationId !== "string" ||
+        typeof candidate.data?.value !== "string"
+    ) {
+        throw new Error(
+            "Invalid TestEvent."
+        );
+    }
+
+    return {
+        eventId:
+            candidate.eventId,
+        eventType:
+            candidate.eventType,
+        correlationId:
+            candidate.correlationId,
+        data: {
+            value:
+                candidate.data.value
+        }
+    };
+}
+
 function createTestEvent():
     TestEvent {
     return {
@@ -1555,13 +2364,26 @@ function createTestEvent():
 function createMessage(
     body: unknown
 ): ConsumeMessage {
+    return createRawMessage(
+        JSON.stringify(
+            body
+        )
+    );
+}
+
+function createRawMessage(
+    content: string
+): ConsumeMessage {
     return {
         content:
             Buffer.from(
-                JSON.stringify(
-                    body
-                )
-            )
+                content
+            ),
+        fields: {
+            redelivered:
+                false
+        },
+        properties: {}
     } as ConsumeMessage;
 }
 
@@ -1768,13 +2590,22 @@ class FakeChannel
         exchangeName: string;
         routingKey: string;
         content: Buffer;
-        options: {
-            contentType: string;
-            deliveryMode: number;
-            messageId: string;
-            correlationId: string;
-        };
+        options: RabbitMqPublishOptions;
     }[] = [];
+
+    readonly prefetchCalls:
+        number[] = [];
+
+    readonly cancelledConsumerTags:
+        string[] = [];
+
+    /**
+     * Simulates the broker's publisher confirmation. Tests can
+     * replace it to model nacks, slow confirms or closed channels.
+     */
+    confirmPublication:
+        () => Promise<void> =
+        async () => undefined;
 
     readonly consumeCalls: {
         queueName: string;
@@ -1856,17 +2687,22 @@ class FakeChannel
         return {};
     }
 
-    publish(
+    async prefetch(
+        count: number
+    ): Promise<unknown> {
+        this.prefetchCalls.push(
+            count
+        );
+
+        return {};
+    }
+
+    async publish(
         exchangeName: string,
         routingKey: string,
         content: Buffer,
-        options: {
-            contentType: string;
-            deliveryMode: number;
-            messageId: string;
-            correlationId: string;
-        }
-    ): boolean {
+        options: RabbitMqPublishOptions
+    ): Promise<void> {
         this
             .publishCalls
             .push({
@@ -1876,7 +2712,7 @@ class FakeChannel
                 options
             });
 
-        return true;
+        await this.confirmPublication();
     }
 
     async consume(
@@ -1885,7 +2721,9 @@ class FakeChannel
             message:
                 ConsumeMessage | null
         ) => void | Promise<void>
-    ): Promise<unknown> {
+    ): Promise<{
+        consumerTag: string;
+    }> {
         this
             .consumeCalls
             .push({
@@ -1897,6 +2735,16 @@ class FakeChannel
             consumerTag:
                 "fake-consumer"
         };
+    }
+
+    async cancel(
+        consumerTag: string
+    ): Promise<unknown> {
+        this.cancelledConsumerTags.push(
+            consumerTag
+        );
+
+        return {};
     }
 
     ack(

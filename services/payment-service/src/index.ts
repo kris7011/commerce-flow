@@ -1,5 +1,6 @@
-import type {
-    OrderCreatedEvent
+import {
+    ROUTING_KEYS,
+    parseOrderCreatedEvent
 } from "@commerce-flow/contracts";
 import {
     createStructuredLogger
@@ -68,15 +69,18 @@ const rabbitMqSupervisor =
     new RabbitMqSupervisor(
         rabbitMq,
         async signal => {
-            await rabbitMq
-                .subscribe<OrderCreatedEvent>(
+            await rabbitMq.subscribe({
+                queueName:
                     "payment-service.order-created",
-                    [
-                        "order.created"
-                    ],
+                routingKeys: [
+                    ROUTING_KEYS.OrderCreated
+                ],
+                parseEvent:
+                    parseOrderCreatedEvent,
+                handler:
                     handleOrderCreated,
-                    signal
-                );
+                signal
+            });
         },
         {},
         {

@@ -1,5 +1,6 @@
-import type {
-    PaymentAuthorizedEvent
+import {
+    ROUTING_KEYS,
+    parsePaymentAuthorizedEvent
 } from "@commerce-flow/contracts";
 import {
     createStructuredLogger
@@ -102,16 +103,18 @@ const rabbitMqSupervisor =
     new RabbitMqSupervisor(
         rabbitMq,
         async signal => {
-            await rabbitMq
-                .subscribe<PaymentAuthorizedEvent>(
-                    "inventory-service." +
-                    "payment-authorized",
-                    [
-                        "payment.authorized"
-                    ],
+            await rabbitMq.subscribe({
+                queueName:
+                    "inventory-service.payment-authorized",
+                routingKeys: [
+                    ROUTING_KEYS.PaymentAuthorized
+                ],
+                parseEvent:
+                    parsePaymentAuthorizedEvent,
+                handler:
                     handlePaymentAuthorized,
-                    signal
-                );
+                signal
+            });
         },
         {},
         {
