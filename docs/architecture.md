@@ -1,172 +1,114 @@
 # Architecture
 
-CommerceFlow is built as a small event-driven microservice demo in an e-commerce domain.
-
-The system is split into services based on business responsibility.
+This document describes how CommerceFlow is structured internally. The [README](../README.md) gives the overview, and [reliability.md](reliability.md) covers failure handling.
 
 ## Service boundaries
 
-### Order Service
+Each service owns one step of the workflow and talks to the others only through events. No service calls another over HTTP, and no two services share a database.
 
-Owns order creation.
+| Service | Owns | Why it is separate |
+|---|---|---|
+| Order | Accepting and validating orders | The public entry point; must answer quickly and independently of downstream steps |
+| Payment | Payment authorization (simulated) | In a real system this integrates with a payment provider with its own failure modes |
+| Inventory | Stock and reservations | The only service with durable business state; it must never oversell |
+| Delivery | Delivery booking (simulated) | Integrates with carriers in a real system |
+| Notification | Customer-facing messages | Reacts to outcomes from several services |
 
-Responsibilities:
+## Layers inside a service
 
-- Receive order requests
-- Validate order input
-- Create order ID
-- Calculate total amount
-- Publish `OrderCreated`
+```mermaid
+flowchart TB
+    subgraph composition[Composition root · index.ts]
+        config[validated config]
+        host[runService host]
+    end
 
-Order Service does not call Payment Service, Inventory Service, Delivery Service or Notification Service directly.
+    subgraph adapters[Adapters]
+        http[Express app]
+        handler[message handler]
+        pgstore[PostgresInventoryStore]
+        relay[OutboxRelay + PostgresOutboxStore]
+        rabbit[RabbitMqClient]
+    end
 
-### Payment Service
+    subgraph core[Application core]
+        service[InventoryService<br/>business rules]
+        ports[[InventoryUnitOfWork<br/>InventoryTransaction]]
+    end
 
-Owns payment authorization.
-
-Responsibilities:
-
-- Listen to `OrderCreated`
-- Simulate payment authorization
-- Publish `PaymentAuthorized`
-
-### Inventory Service
-
-Owns stock reservation.
-
-Responsibilities:
-
-- Listen to `PaymentAuthorized`
-- Check stock availability
-- Reserve stock when available
-- Publish `InventoryReserved`
-- Publish `InventoryReservationFailed` when stock is insufficient
-
-### Delivery Service
-
-Owns delivery booking.
-
-Responsibilities:
-
-- Listen to `InventoryReserved`
-- Simulate delivery booking
-- Publish `DeliveryBooked`
-
-### Notification Service
-
-Owns customer notifications.
-
-Responsibilities:
-
-- Listen to `DeliveryBooked`
-- Listen to `InventoryReservationFailed`
-- Create customer-facing notification records
-
-## Event-driven flow
-
-The services communicate through domain events.
-
-A service publishes that something has happened. It does not need to know who reacts to it.
-
-Example:
-
-```text
-Order Service publishes OrderCreated.
-Payment Service listens to OrderCreated.
+    composition --> adapters
+    handler --> service
+    http --> pgstore
+    service --> ports
+    pgstore -. implements .-> ports
+    relay --> rabbit
 ```
 
-This avoids direct coupling between Order Service and Payment Service.
+* **The application core** (`inventoryService.ts`) decides whether a reservation succeeds and builds the resulting event. It imports only contract types and its own ports.
+* **Ports** (`inventoryStore.ts`) describe what the core needs from persistence: lock the order, lock stock, decrement stock, record the outcome and enqueue an event, all within one `inTransaction` call.
+* **Adapters** implement those ports for PostgreSQL and in memory. The in-memory adapter keeps the transactional contract (serialised transactions, rollback on throw), so unit tests exercise the same rules.
+* **The composition root** wires concrete adapters, reads configuration and hands background tasks to the service host.
 
-## Why not direct HTTP calls?
+The stateless services follow the same pattern with fewer moving parts: a pure service class (`PaymentService`, `DeliveryService`, `NotificationService`), a message handler with an injected publisher and logger, an Express app for health endpoints, and an `index.ts`.
 
-A direct flow could look like this:
+Ports exist only where they pay off: where there are several implementations, or where business rules have to be kept free of infrastructure. There is no DI container; dependencies are passed explicitly to constructors and factory functions.
 
-```text
-Order Service -> Payment Service -> Inventory Service -> Delivery Service -> Notification Service
+## Shared packages
+
+| Package | Contents | Notes |
+|---|---|---|
+| `@commerce-flow/contracts` | Event types, zod schemas, `ROUTING_KEYS`, `deriveDeterministicId` | Single source of truth for message shape and routing |
+| `@commerce-flow/messaging` | `RabbitMqClient`, `RabbitMqSupervisor`, `PermanentMessageError` | Confirms, retries, DLQ, prefetch, drain |
+| `@commerce-flow/logging` | Structured JSON logger with child contexts | Errors are serialised; no payloads are logged |
+| `@commerce-flow/runtime` | Configuration readers, `runService` | Graceful, bounded shutdown on SIGTERM/SIGINT |
+| `@commerce-flow/testing` | Isolated test databases | Destructive operations are guarded by a name check |
+
+## Messaging layer
+
+`RabbitMqClient` wraps amqplib and holds one connection with one **confirm channel**.
+
+* **`publish(routingKey, event)`** connects if needed, publishes a persistent message with `messageId`, `correlationId` and `type`, and resolves only on the broker's ack. A nack, a channel closing before the confirm, or the publish timeout reject with the event id and routing key in the message.
+* **`subscribe({ queueName, routingKeys, parseEvent, handler })`** declares the durable topic exchange, the queue with its dead-letter exchange and queue, and the bindings. It then sets the prefetch and starts consuming. Every delivery is decoded and validated with `parseEvent`; invalid messages are dead-lettered. The handler is retried with exponential backoff for transient errors and the message is dead-lettered after the last attempt. The message is acknowledged only after the handler succeeds.
+* **`close()`** cancels the consumers, waits (bounded) for in-flight handlers, then closes the channel and connection. Unacknowledged messages return to their queues.
+
+`RabbitMqSupervisor` runs as a background task. While the client is not ready, it calls an initialisation function (connect and subscribe) with retries, so a service that starts during a broker outage, or loses the broker later, recovers by itself. Readiness (`/ready`) reflects the supervisor's view.
+
+## Service host
+
+`runService` (in `@commerce-flow/runtime`) gives every service the same lifecycle:
+
+```mermaid
+sequenceDiagram
+    participant OS as Process / orchestrator
+    participant H as runService
+    participant S as HTTP server
+    participant T as Background tasks
+    participant R as Resources (stop)
+
+    H->>H: start() — e.g. migrations
+    H->>S: listen
+    H->>T: run(signal) — supervisor, outbox relay
+    OS->>H: SIGTERM
+    H->>S: close (stop accepting)
+    H->>T: abort signal, await completion
+    H->>R: stop() — drain consumers, close broker and pool
+    H->>OS: exit 0
+    note over H: forced exit if this exceeds the timeout;<br/>a crashed background task exits non-zero
 ```
 
-This makes services tightly coupled.
+## Persistence
 
-In CommerceFlow, services communicate through events:
+Inventory Service owns four tables, created by versioned migrations (`src/migrations.ts`):
 
-```text
-OrderCreated
-PaymentAuthorized
-InventoryReserved
-DeliveryBooked
-```
+| Table | Purpose | Key constraints |
+|---|---|---|
+| `inventory_stock` | Current quantity per product | `CHECK (quantity >= 0)` |
+| `inventory_reservations` | One outcome per order (idempotency record) | `PRIMARY KEY (order_id)`; `reservation_id` set if and only if the status is `Reserved` |
+| `inventory_outbox` | Events waiting for publication | `UNIQUE (event_id)`; partial index on pending rows; `attempts >= 0` |
+| `inventory_schema_migrations` | Applied migration versions | – |
 
-This allows new services to be added without changing the original publisher.
+All pending migrations run in one transaction under an advisory lock. Concurrent service instances therefore migrate safely, and a failed migration leaves the schema untouched. Migrations are forward-only; a released migration is never edited.
 
-Notification Service is an example of this. It was added later and simply listens to existing events.
+## Correlation and logging
 
-## Event contracts
-
-Event contracts are stored in:
-
-```text
-shared/contracts/src/events.ts
-```
-
-This keeps event shape consistent across services.
-
-For this demo, shared contracts are acceptable because the project is a monorepo.
-
-In a larger distributed system, alternatives could include:
-
-- versioned contracts
-- schema registry
-- published internal packages
-- protobuf or Avro schemas
-
-## Messaging abstraction
-
-RabbitMQ logic is stored in:
-
-```text
-shared/messaging/src/rabbitMqClient.ts
-```
-
-This keeps infrastructure code out of the services.
-
-The services do not need to know how to:
-
-- connect to RabbitMQ
-- assert exchanges
-- assert queues
-- bind queues
-- configure dead-letter queues
-- handle idempotency
-
-They only call:
-
-```ts
-publish(...)
-subscribe(...)
-```
-
-## Topic exchange
-
-The project uses a RabbitMQ topic exchange:
-
-```text
-commerce.events
-```
-
-Topic routing keys make it possible to route events by business meaning:
-
-```text
-order.created
-payment.authorized
-inventory.reserved
-inventory.reservation.failed
-delivery.booked
-```
-
-## Correlation ID
-
-Each event includes a `correlationId`.
-
-The same correlation ID flows through all related events.
-
-This makes it easier to trace one business process across several services.
+Order Service creates (or accepts) a correlation id. Every event carries it, every consumer copies it into the events it emits, and every log line about the order includes it. Logs are JSON lines, so one order can be followed across all five services by filtering on `correlationId`.
