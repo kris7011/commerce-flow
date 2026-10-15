@@ -31,6 +31,25 @@ COMMIT
 * The **primary key** on `order_id` rejects a second outcome even if the lock were bypassed; the transaction then rolls back and the retry sees the duplicate.
 * The **`CHECK (quantity >= 0)`** constraint is a last line of defence against negative stock.
 
+## Routing guarantees
+
+A publisher confirm means the broker has taken responsibility for a message. It does **not** mean that any queue received it: RabbitMQ positively confirms a message that matches no binding and then discards it. Without further measures an outbox event would be marked as published and lost, and the Order Service would answer `201` for an order nobody will ever process.
+
+Two complementary measures close this gap:
+
+1. **Provisioned topology.** `COMMERCE_TOPOLOGY` (in `@commerce-flow/contracts`) lists every consumer queue and its routing keys. Every service declares it idempotently on each (re)connect, using the same declaration code as `subscribe()`, so arguments always match. Events wait in durable queues even if their consumer has never started.
+2. **Mandatory publishing with correlated returns.** Every message is published with `mandatory: true` and a unique `x-publication-id` header. RabbitMQ sends `basic.return` for an unroutable message *before* the `basic.ack` on the same channel, and amqplib processes frames in order, so when a publication's confirm arrives its return (if any) has already been recorded. Such a publication is rejected with `UnroutableMessageError`. Correlation uses the header rather than the message id, because the same event can legitimately be published twice concurrently.
+
+| Publishing path | Effect of an unroutable message |
+|---|---|
+| Inventory outbox relay | The event stays pending with `last_error` and is retried with backoff until a queue exists |
+| Order Service `POST /orders` | `503` with `Retry-After`; never `201` |
+| Payment, Delivery handlers | The handler fails, so the input message is not acknowledged: it is retried and finally dead-lettered |
+
+## Deterministic re-emission
+
+Payment and Delivery hold no state, so after a crash between "publish" and "ack" they process the input message again. Their output is a pure function of the input event: ids are derived with `deriveDeterministicId`, `occurredAt` is taken from the source event, and the estimated delivery date is the reservation date plus three days. A re-emitted event is therefore byte-identical to the original, also when the redelivery happens on a later date. The same event id never carries two different outcomes.
+
 ## Outbox relay
 
 | Step | Statement | Why |
@@ -56,6 +75,12 @@ The relay wakes up when the handler commits a new event (`notify()`) and otherwi
 | Database terminates the relay's connections | Cycle fails, relay backs off and continues | `outbox.integration` · *keeps relaying after PostgreSQL terminates its connections* |
 | RabbitMQ unavailable when publishing from the outbox | Events stay pending with `attempts` and `last_error`; retried with backoff | `outbox.integration` · *keeps events pending while RabbitMQ is unreachable* |
 | Relay or process restart with pending events | Any relay instance picks them up | same test (*after a relay restart*) and E2E *Inventory Service crash* |
+| Event published before its consumer ever started (fresh broker) | Provisioned topology holds it in a durable queue | `routing.integration` · *provisioned topology*; E2E *orders accepted while every downstream service is offline* |
+| Event matches no queue (missing binding) | Mandatory publish is returned; publication fails; outbox keeps it pending | `routing.integration` · *rejects a publication that no queue can receive*; `outbox.integration` · *keeps an unroutable event pending* |
+| Queue appears after an unroutable attempt | The retry succeeds; no second reservation | `routing.integration` · *publishes successfully once the destination queue exists*; `outbox.integration` |
+| Concurrent publications, some unroutable | Exactly the returned ones fail | `confirmedPublisher` unit; `routing.integration` · *40 concurrent* |
+| `OrderCreated` cannot be routed | `503`, never `201` | `orderApp.integration` |
+| Redelivery to Payment/Delivery on a later date | Byte-identical event | `paymentService` / `deliveryService` unit · *later date* / *after midnight* |
 | Broker nacks, or channel closes before the confirm | `publish()` rejects; the event is retried | `rabbitMqClient` unit · *nacks* / *channel closes* |
 | Confirm never arrives | `PublishTimeoutError`; retried; the lease exceeds the timeout | `rabbitMqClient` unit · *timeout*; config check `OUTBOX_LEASE_MS ≥ 2 × timeout` |
 | Crash after publishing, before marking published | Lease expires; event re-published **with the same event id** | `outbox.integration` · *crashed after publishing but before marking it* |
@@ -70,7 +95,7 @@ The relay wakes up when the handler commits a new event (`notify()`) and otherwi
 | Broker down during `POST /orders` | `503` + `Retry-After`; the process keeps running | `orderApp` unit · *returns 503 with Retry-After instead of crashing* |
 | Concurrent schema migrations | Advisory lock; each version applied once | `database.integration` · *serializes concurrent migrations* |
 | A migration fails | All pending migrations roll back | `database.integration` · *rolls back every pending migration* |
-| Payment or Delivery processes a message twice | Deterministic ids re-emit an identical event | `paymentService` and `deliveryService` unit · *re-emits an identical event* |
+| Payment or Delivery processes a message twice | The re-emitted event is byte-identical (ids, timestamps, dates) | `paymentService` and `deliveryService` unit · *re-emits an identical event* |
 | Notification receives a duplicate | One notification per order and outcome | `notificationEventHandler` unit and E2E |
 
 ## Where duplicates can come from, and where they stop

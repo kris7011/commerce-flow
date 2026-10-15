@@ -25,7 +25,7 @@ CommerceFlow models a small commerce workflow — order, payment, inventory, del
 The business logic is intentionally simple. The engineering focus is on the parts that are hard in real distributed systems:
 
 * **Atomic state changes and events.** Inventory Service writes its stock change and the resulting event in one PostgreSQL transaction (transactional outbox).
-* **Reliable publication.** Events are published with RabbitMQ publisher confirms and only marked as published after the broker accepts them.
+* **Reliable publication.** Events are published as mandatory messages with RabbitMQ publisher confirms. A publication counts as successful only if the broker confirmed it *and* routed it to a queue; only then is an outbox event marked as published.
 * **Duplicate tolerance.** Delivery is at-least-once. Every consumer is idempotent, and stock can never be reserved twice for the same order.
 * **Failure handling.** Transient failures are retried with bounded backoff, poison messages are dead-lettered, and services recover from broker and database outages without restarting.
 * **Tests that prove failure behaviour.** Integration and end-to-end tests run against real PostgreSQL and RabbitMQ and cover crashes, outages, duplicates and concurrency.
@@ -171,7 +171,7 @@ interface DomainEvent<TEventType, TData> {
 | `InventoryReservationFailed` | `inventory.reservation.failed` | Inventory (outbox) | `notification-service.customer-events` |
 | `DeliveryBooked` | `delivery.booked` | Delivery | `notification-service.customer-events` |
 
-The routing keys live in one map (`ROUTING_KEYS`). Every queue is durable and has a dead-letter queue named `<queue>.dead-letter`, bound to the `commerce.events.dead-letter` exchange. Messages are persistent and carry `messageId`, `correlationId` and `type`.
+The routing keys live in one map (`ROUTING_KEYS`), and the queues bound to them in another (`QUEUES` / `COMMERCE_TOPOLOGY`). Every service declares this **whole topology** idempotently each time it connects, before it publishes anything. An event therefore always has a durable queue to wait in, whichever service starts first; a contract test asserts that every routing key is bound to at least one queue. Every queue is durable and has a dead-letter queue named `<queue>.dead-letter`, bound to the `commerce.events.dead-letter` exchange. Messages are persistent and carry `messageId`, `correlationId` and `type`.
 
 Consumers validate every message against a **zod schema** before handling it. The schemas follow the tolerant-reader principle: they ignore unknown fields, so producers can add optional fields without a coordinated deployment. A breaking change requires a new event type.
 
@@ -218,6 +218,7 @@ stateDiagram-v2
 | Mechanism | Guarantees |
 |---|---|
 | Publisher confirms | Publication counts as successful only once the broker has accepted the message |
+| Mandatory publishing + `basic.return` correlation | A message the broker accepted but could not route to any queue counts as **failed**, even though RabbitMQ still sends a positive confirm for it |
 | Persistent messages, durable queues | Accepted messages survive a broker restart |
 | Manual ack after the handler completes | A crash during handling causes redelivery, never loss |
 | Outbox | A committed reservation always gets its event published |
@@ -227,7 +228,7 @@ The cost of these guarantees is **duplicates**: a crash between "publish" and "a
 | Consumer | Duplicate protection |
 |---|---|
 | Inventory | **Durable.** The business key `order_id` is serialised by an advisory lock and backed by the primary key. It also catches logically duplicate events that carry a *different* event id. |
-| Payment, Delivery | Event ids are derived deterministically from the source event (UUIDv5 layout), so reprocessing re-emits an *identical* event that downstream consumers recognise. |
+| Payment, Delivery | The emitted event is a pure function of the source event: ids are derived deterministically (UUIDv5 layout) and timestamps and dates come from the source event, so reprocessing — even on a later date — re-emits a *byte-identical* event. One event id never stands for two different outcomes. |
 | Notification | Deduplicates on the business key (order id, notification type). |
 | All | A bounded in-memory cache of recent event ids skips obvious redeliveries cheaply. It is an optimisation only. |
 
@@ -348,13 +349,18 @@ Every service writes one JSON object per line, with the service name, a message 
 | 10 concurrent redeliveries, or 5 duplicates with new event ids, reserve once | same |
 | A terminated database connection mid-transaction commits nothing; the service recovers | same |
 | Publisher confirms, broker nack, confirm timeout, channel closed before confirm | `shared/messaging/tests` |
+| `basic.return` fails the right publication among concurrent ones (even with identical message ids) | `shared/messaging/tests/confirmedPublisher.test.ts` |
+| Fresh virtual host without bindings: publish is rejected as unroutable; succeeds once the queue exists; 40 concurrent mixed publications; real broker nack; publisher before any consumer | `shared/messaging/tests/integration/routing.integration.test.ts` |
+| Unroutable outbox event stays pending and is published once its queue exists, without a second reservation | `inventory-service/tests/outbox.integration.test.ts` |
+| Order Service answers 503 (never 201) when `OrderCreated` cannot be routed | `order-service/tests/orderApp.integration.test.ts` |
+| Redelivery across a date change re-emits an identical event | `payment-service` and `delivery-service` unit tests |
 | Poison message → DLQ, retry exhaustion → DLQ, graceful drain without redelivery | `shared/messaging/tests/integration` |
 | Broker unreachable → events stay pending → a restarted relay publishes them | `inventory-service/tests/outbox.integration.test.ts` |
 | Crash between publish and "mark published" → re-published with the same event id | same |
 | 4 competing relays publish 200 events exactly once; stale claims are fenced | same |
 | The relay survives PostgreSQL terminating its connections and finishes its batch on shutdown | same |
 | Concurrent migrations apply once; the legacy schema is adopted; a failed migration rolls back | `inventory-service/tests/database.integration.test.ts` |
-| Full workflow, success and failure | `tests/e2e/commerceFlow.e2e.test.ts` |
+| Full workflow, success and failure; orders accepted while every downstream service is still offline | `tests/e2e/commerceFlow.e2e.test.ts` |
 | Duplicate deliveries, poison message, outbox recovery after an Inventory `SIGKILL` | `tests/e2e/inventoryReliability.e2e.test.ts` |
 | All services survive a broker outage and recover without restarting | `tests/e2e/rabbitMqRecovery.e2e.test.ts` |
 
@@ -377,6 +383,8 @@ GitHub Actions ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs on 
 **Polling with `SKIP LOCKED` instead of `LISTEN/NOTIFY` or CDC.** Polling is simple, survives restarts and lets several relays share work without coordination. Log-based change data capture (e.g. Debezium) scales further but adds infrastructure that is not justified here.
 
 **Leases instead of long-lived row locks.** Holding `FOR UPDATE` across a network call would tie database connections to broker latency. A lease (`available_at`) bounds how long a crashed relay can block an event, and the `attempts` fencing token keeps late updates harmless.
+
+**Provisioned topology plus mandatory publishing.** Publisher confirms only say that the broker took responsibility, not that a queue received the message: RabbitMQ confirms an unroutable message and drops it. Declaring the complete topology from every service removes the start-order dependency; mandatory publishing with correlated `basic.return` handling turns any remaining gap (a deleted queue, a missing binding) into a failed publication that the outbox retries, instead of silent loss. Either measure alone is insufficient: provisioning cannot detect drift, and mandatory publishing alone would reject every event published before its consumer first started.
 
 **Business-key idempotency instead of an inbox table.** The order id identifies the business operation. Keying the reservation on it catches redeliveries *and* re-emitted events with new ids, which an inbox keyed on message ids would miss. A separate inbox would add a table without adding protection.
 
@@ -401,7 +409,7 @@ GitHub Actions ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs on 
 * **Notifications are in memory** and are lost on restart.
 * **Handler retries live in memory.** A crash during a retry delay leads to redelivery (safe, but the retry counter restarts). Dead-lettered messages must be replayed manually.
 * **Ordering.** Events are published roughly in outbox order, but concurrent relays and retries can reorder them. This is harmless here because each order produces one inventory event.
-* **Unroutable messages.** RabbitMQ drops a message when no queue is bound to its routing key. Consumers declare their queues on startup, so they must have started at least once.
+* **Unroutable events from Payment and Delivery.** If a binding were missing despite the provisioned topology, their publish fails and the input message is retried and then dead-lettered (not lost, but it needs a manual replay). Inventory's outbox keeps retrying instead.
 * **Outbox retention.** Published rows are kept indefinitely. Production would prune them.
 * **Observability** is limited to structured logs, readiness and the outbox diagnostics endpoint. There are no metrics backend or distributed traces (OpenTelemetry would be the next step).
 * **The services are not containerised.** Docker Compose provides only the infrastructure, and the services run from source with `tsx`.

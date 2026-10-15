@@ -67,7 +67,8 @@ Ports exist only where they pay off: where there are several implementations, or
 
 `RabbitMqClient` wraps amqplib and holds one connection with one **confirm channel**.
 
-* **`publish(routingKey, event)`** connects if needed, publishes a persistent message with `messageId`, `correlationId` and `type`, and resolves only on the broker's ack. A nack, a channel closing before the confirm, or the publish timeout reject with the event id and routing key in the message.
+* **On every (re)connect** the client declares the exchange and, if configured, the complete queue topology (`COMMERCE_TOPOLOGY`), so events can be routed before their consumers have ever started.
+* **`publish(routingKey, event)`** connects if needed and publishes a persistent, **mandatory** message with `messageId`, `correlationId` and `type`. It resolves only when the broker has acked the message and has not returned it as unroutable (`ConfirmedPublisher` correlates `basic.return` with its publication). A return, a nack, a channel closing before the confirm, or the publish timeout reject with the event id and routing key in the message.
 * **`subscribe({ queueName, routingKeys, parseEvent, handler })`** declares the durable topic exchange, the queue with its dead-letter exchange and queue, and the bindings. It then sets the prefetch and starts consuming. Every delivery is decoded and validated with `parseEvent`; invalid messages are dead-lettered. The handler is retried with exponential backoff for transient errors and the message is dead-lettered after the last attempt. The message is acknowledged only after the handler succeeds.
 * **`close()`** cancels the consumers, waits (bounded) for in-flight handlers, then closes the channel and connection. Unacknowledged messages return to their queues.
 
