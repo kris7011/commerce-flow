@@ -1,10 +1,16 @@
-import { randomUUID } from "node:crypto";
-import type {
-    DeliveryBookedEvent,
-    InventoryReservedEvent
+import {
+    deriveDeterministicId,
+    type DeliveryBookedEvent,
+    type InventoryReservedEvent
 } from "@commerce-flow/contracts";
 
 export interface DeliveryServiceDependencies {
+    /**
+     * Overrides id generation (used by tests). By default the event id
+     * is derived from the source event and the delivery id from the
+     * order, so a redelivered InventoryReserved message re-emits an
+     * identical, recognisable DeliveryBooked event.
+     */
     generateId?: () => string;
     getCurrentDate?: () => Date;
 }
@@ -13,14 +19,14 @@ const DEFAULT_CARRIER = "DefaultCarrier";
 const DELIVERY_TIME_IN_DAYS = 3;
 
 export class DeliveryService {
-    private readonly generateId: () => string;
+    private readonly generateId: (() => string) | undefined;
     private readonly getCurrentDate: () => Date;
 
     constructor(
         dependencies: DeliveryServiceDependencies = {}
     ) {
         this.generateId =
-            dependencies.generateId ?? (() => randomUUID());
+            dependencies.generateId;
 
         this.getCurrentDate =
             dependencies.getCurrentDate ?? (() => new Date());
@@ -32,13 +38,19 @@ export class DeliveryService {
         const currentDate = this.getCurrentDate();
 
         return {
-            eventId: this.generateId(),
+            eventId: this.createId(
+                "delivery-booked-event",
+                sourceEvent.eventId
+            ),
             eventType: "DeliveryBooked",
             occurredAt: currentDate.toISOString(),
             correlationId: sourceEvent.correlationId,
             data: {
                 orderId: sourceEvent.data.orderId,
-                deliveryId: this.generateId(),
+                deliveryId: this.createId(
+                    "delivery",
+                    sourceEvent.data.orderId
+                ),
                 carrier: DEFAULT_CARRIER,
                 estimatedDeliveryDate:
                     calculateEstimatedDeliveryDate(
@@ -47,6 +59,19 @@ export class DeliveryService {
                     )
             }
         };
+    }
+
+    private createId(
+        namespace: string,
+        key: string
+    ): string {
+        return (
+            this.generateId?.() ??
+            deriveDeterministicId(
+                `delivery-service.${namespace}`,
+                key
+            )
+        );
     }
 }
 

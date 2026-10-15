@@ -126,6 +126,37 @@ test(
     }
 );
 
+test(
+    "re-emits an identical event when the same reservation is redelivered",
+    () => {
+        const deliveryService =
+            new DeliveryService({
+                getCurrentDate: () =>
+                    new Date(fixedDate.getTime())
+            });
+
+        const first =
+            deliveryService.bookDelivery(
+                createInventoryReservedEvent()
+            );
+
+        const redelivered =
+            deliveryService.bookDelivery(
+                createInventoryReservedEvent()
+            );
+
+        assert.deepEqual(
+            redelivered,
+            first
+        );
+
+        assert.notEqual(
+            first.eventId,
+            first.data.deliveryId
+        );
+    }
+);
+
 function createDeliveryService(
     generatedIds: string[]
 ): DeliveryService {

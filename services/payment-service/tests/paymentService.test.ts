@@ -96,6 +96,53 @@ test(
     }
 );
 
+test(
+    "re-emits an identical event when the same order event is redelivered",
+    () => {
+        const paymentService = new PaymentService({
+            getCurrentTime: () => fixedTime
+        });
+
+        const first = paymentService.authorizePayment(
+            createOrderCreatedEvent()
+        );
+
+        const redelivered = paymentService.authorizePayment(
+            createOrderCreatedEvent()
+        );
+
+        assert.deepEqual(redelivered, first);
+
+        assert.match(
+            first.eventId,
+            /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+        );
+
+        assert.notEqual(first.eventId, first.data.paymentId);
+    }
+);
+
+test(
+    "derives different ids for different orders",
+    () => {
+        const paymentService = new PaymentService();
+
+        const first = paymentService.authorizePayment(
+            createOrderCreatedEvent()
+        );
+
+        const second = paymentService.authorizePayment({
+            ...createOrderCreatedEvent({
+                orderId: "order-002"
+            }),
+            eventId: "order-event-002"
+        });
+
+        assert.notEqual(first.eventId, second.eventId);
+        assert.notEqual(first.data.paymentId, second.data.paymentId);
+    }
+);
+
 function createPaymentService(
     generatedIds: string[]
 ): PaymentService {

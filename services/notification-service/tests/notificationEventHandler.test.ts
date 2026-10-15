@@ -168,6 +168,54 @@ test(
     }
 );
 
+test(
+    "notifies the customer once even if the event is delivered again with a new id",
+    async () => {
+        const notificationService =
+            createNotificationService([
+                "notification-001",
+                "notification-002"
+            ]);
+
+        const logger =
+            new RecordingNotificationLogger();
+
+        const handler =
+            createNotificationEventHandler({
+                notificationService,
+                logger
+            });
+
+        await handler(
+            createDeliveryBookedEvent()
+        );
+
+        await handler({
+            ...createDeliveryBookedEvent(),
+            eventId:
+                "delivery-event-redelivered"
+        });
+
+        assert.equal(
+            notificationService
+                .getNotifications()
+                .length,
+            1
+        );
+
+        assert.equal(
+            logger.warningLogs[0]?.message,
+            "Ignored duplicate notification event"
+        );
+
+        assert.equal(
+            logger.warningLogs[0]?.context
+                ?.existingNotificationId,
+            "notification-001"
+        );
+    }
+);
+
 class RecordingNotificationLogger
     implements AppLogger {
     readonly infoLogs: {

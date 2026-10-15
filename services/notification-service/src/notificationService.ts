@@ -75,9 +75,43 @@ export class NotificationService {
             (() => new Date().toISOString());
     }
 
+    findNotification(
+        orderId: string,
+        type: CustomerNotification["type"]
+    ): CustomerNotification | undefined {
+        const existing =
+            this.notifications.find(notification => {
+                return (
+                    notification.orderId === orderId &&
+                    notification.type === type
+                );
+            });
+
+        return existing
+            ? {
+                ...existing
+            }
+            : undefined;
+    }
+
+    /**
+     * Idempotent per order and notification type: a customer is told
+     * about each outcome once, even if the event is delivered again
+     * (including re-emissions with a different event id).
+     */
     createNotification(
         event: NotificationEvent
     ): CustomerNotification {
+        const existing =
+            this.findNotification(
+                event.data.orderId,
+                event.eventType
+            );
+
+        if (existing) {
+            return existing;
+        }
+
         const notification =
             this.buildNotification(event);
 

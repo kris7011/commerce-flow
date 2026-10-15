@@ -31,6 +31,33 @@ export function createNotificationEventHandler(
     return async (
         event: NotificationEvent
     ): Promise<void> => {
+        const existing =
+            notificationService
+                .findNotification(
+                    event.data.orderId,
+                    event.eventType
+                );
+
+        if (existing) {
+            logger.warn(
+                "Ignored duplicate notification event",
+                {
+                    eventId:
+                        event.eventId,
+                    eventType:
+                        event.eventType,
+                    orderId:
+                        event.data.orderId,
+                    correlationId:
+                        event.correlationId,
+                    existingNotificationId:
+                        existing.notificationId
+                }
+            );
+
+            return;
+        }
+
         const notification =
             notificationService
                 .createNotification(event);
