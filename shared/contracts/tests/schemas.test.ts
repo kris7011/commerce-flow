@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+    COMMERCE_TOPOLOGY,
     ROUTING_KEYS,
     getRoutingKey,
     parseDeliveryBookedEvent,
@@ -264,6 +265,40 @@ test(
                 ROUTING_KEYS
             ).length,
             "Routing keys must be unique."
+        );
+    }
+);
+
+test(
+    "binds every routing key to at least one queue",
+    () => {
+        const boundRoutingKeys =
+            new Set(
+                COMMERCE_TOPOLOGY.flatMap(
+                    queue =>
+                        queue.routingKeys
+                )
+            );
+
+        for (const routingKey of Object.values(ROUTING_KEYS)) {
+            assert.ok(
+                boundRoutingKeys.has(
+                    routingKey
+                ),
+                `No queue is bound to '${routingKey}'; ` +
+                `events with this routing key would be unroutable.`
+            );
+        }
+
+        assert.equal(
+            new Set(
+                COMMERCE_TOPOLOGY.map(
+                    queue =>
+                        queue.queueName
+                )
+            ).size,
+            COMMERCE_TOPOLOGY.length,
+            "Queue names must be unique."
         );
     }
 );

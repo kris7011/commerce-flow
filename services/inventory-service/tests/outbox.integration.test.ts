@@ -9,6 +9,9 @@ import type {
 import {
     RabbitMqClient
 } from "@commerce-flow/messaging";
+import {
+    createTestVirtualHost
+} from "@commerce-flow/testing";
 import * as amqp from "amqplib";
 import pg from "pg";
 import {
@@ -940,5 +943,204 @@ test(
             relay.getStatus().running,
             false
         );
+    }
+);
+
+test(
+    "keeps an unroutable event pending until its queue exists, then publishes it once",
+    {
+        timeout: 30_000
+    },
+    async () => {
+        // A fresh virtual host: no queues, no bindings. The publisher
+        // deliberately has no provisioned topology, which models a
+        // missing or misconfigured consumer queue.
+        const virtualHost =
+            await createTestVirtualHost();
+
+        const publisherClient =
+            new RabbitMqClient(
+                virtualHost.url,
+                "commerce.events",
+                {
+                    maxConnectionRetries: 3,
+                    retryDelayInMs: 50,
+                    publishTimeoutInMs: 3_000
+                },
+                {
+                    logger:
+                        silentLogger
+                }
+            );
+
+        try {
+            const inventoryService =
+                new InventoryService(
+                    new PostgresInventoryStore(
+                        pool
+                    )
+                );
+
+            const sourceEvent =
+                createPaymentAuthorizedEvent(
+                    "order-unroutable",
+                    [
+                        {
+                            productId: "dryer-01",
+                            quantity: 2,
+                            unitPrice: 2999
+                        }
+                    ]
+                );
+
+            const outcome =
+                await inventoryService.reserveForPayment(
+                    sourceEvent
+                );
+
+            assert.equal(
+                outcome.status,
+                "Processed"
+            );
+
+            const relay =
+                createRelay(
+                    new RabbitMqOutboxPublisher(
+                        publisherClient
+                    )
+                );
+
+            assert.equal(
+                await relay.processBatch(),
+                1
+            );
+
+            const pending =
+                await pool.query<{
+                    attempts: number;
+                    lastError: string | null;
+                }>(
+                    `
+                        SELECT
+                            attempts,
+                            last_error AS "lastError"
+                        FROM inventory_outbox
+                        WHERE published_at IS NULL
+                    `
+                );
+
+            assert.equal(
+                pending.rows.length,
+                1,
+                "An unroutable event must not be marked as published."
+            );
+
+            assert.match(
+                pending.rows[0]?.lastError ?? "",
+                /could not route the message.*inventory\.reserved.*312 NO_ROUTE/
+            );
+
+            // The consumer's queue appears later.
+            const connection =
+                await amqp.connect(
+                    virtualHost.url
+                );
+
+            const received:
+                string[] = [];
+
+            try {
+                const channel =
+                    await connection.createChannel();
+
+                await channel.assertQueue(
+                    "delivery-service.inventory-reserved",
+                    {
+                        durable: true
+                    }
+                );
+
+                await channel.bindQueue(
+                    "delivery-service.inventory-reserved",
+                    "commerce.events",
+                    "inventory.reserved"
+                );
+
+                await channel.consume(
+                    "delivery-service.inventory-reserved",
+                    message => {
+                        if (message) {
+                            received.push(
+                                String(
+                                    message.properties.messageId
+                                )
+                            );
+                        }
+                    },
+                    {
+                        noAck: true
+                    }
+                );
+
+                await waitUntil(
+                    async () => {
+                        await relay.processBatch();
+
+                        return (await readOutboxState()).pending === 0;
+                    },
+                    10_000,
+                    "the event to be published after its retry delay"
+                );
+
+                await waitUntil(
+                    () =>
+                        received.length === 1,
+                    5_000,
+                    "the event to reach the late queue"
+                );
+            } finally {
+                await connection.close();
+            }
+
+            assert.deepEqual(
+                received,
+                [
+                    outcome.status === "Processed"
+                        ? outcome.event.eventId
+                        : ""
+                ]
+            );
+
+            // Retrying publication never touched the reservation.
+            assert.equal(
+                (await new PostgresInventoryStore(pool).getAllStock())["dryer-01"],
+                98
+            );
+
+            const reservations =
+                await pool.query<{
+                    count: string;
+                }>(
+                    "SELECT count(*) AS count FROM inventory_reservations"
+                );
+
+            assert.equal(
+                Number(
+                    reservations.rows[0]?.count
+                ),
+                1
+            );
+
+            assert.deepEqual(
+                await readOutboxState(),
+                {
+                    pending: 0,
+                    published: 1
+                }
+            );
+        } finally {
+            await publisherClient.close();
+            await virtualHost.delete();
+        }
     }
 );

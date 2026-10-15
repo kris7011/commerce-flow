@@ -1,5 +1,6 @@
 import {
-    ROUTING_KEYS,
+    COMMERCE_TOPOLOGY,
+    QUEUES,
     parsePaymentAuthorizedEvent
 } from "@commerce-flow/contracts";
 import {
@@ -79,7 +80,9 @@ const rabbitMq =
         "commerce.events",
         {
             publishTimeoutInMs:
-                config.publishTimeoutInMs
+                config.publishTimeoutInMs,
+            topology:
+                COMMERCE_TOPOLOGY
         },
         {
             logger:
@@ -128,11 +131,7 @@ const rabbitMqSupervisor =
         rabbitMq,
         async signal => {
             await rabbitMq.subscribe({
-                queueName:
-                    "inventory-service.payment-authorized",
-                routingKeys: [
-                    ROUTING_KEYS.PaymentAuthorized
-                ],
+                ...QUEUES.inventoryPaymentAuthorized,
                 parseEvent:
                     parsePaymentAuthorizedEvent,
                 handler:

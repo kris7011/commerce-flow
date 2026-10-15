@@ -170,3 +170,79 @@ test(
         }
     }
 );
+
+test(
+    "completes orders accepted while every downstream service was still offline",
+    {
+        timeout: 90_000
+    },
+    async () => {
+        const environment =
+            await createE2eEnvironment();
+
+        const cluster =
+            new ServiceCluster(
+                environment,
+                3150
+            );
+
+        try {
+            // Only the publisher runs; the virtual host is brand new,
+            // so no consumer has ever declared its queue.
+            await cluster.startAll([
+                "order-service"
+            ]);
+
+            const correlationId =
+                `e2e-publisher-first-${randomUUID()}`;
+
+            const order =
+                await createOrder(
+                    cluster.url(
+                        "order-service"
+                    ),
+                    correlationId,
+                    [
+                        {
+                            productId: "dishwasher-01",
+                            quantity: 1,
+                            unitPrice: 3499
+                        }
+                    ]
+                );
+
+            await cluster.startAll([
+                "notification-service",
+                "delivery-service",
+                "inventory-service",
+                "payment-service"
+            ]);
+
+            const notification =
+                await waitForNotification(
+                    cluster.url(
+                        "notification-service"
+                    ),
+                    correlationId,
+                    "DeliveryBooked",
+                    30_000
+                );
+
+            assert.equal(
+                notification.orderId,
+                order.orderId
+            );
+        } catch (error) {
+            throw new Error(
+                "Publisher-first end-to-end test failed.\n\n" +
+                cluster.formatLogs(),
+                {
+                    cause: error
+                }
+            );
+        } finally {
+            await cluster.stopAll();
+            await environment.dispose();
+        }
+    }
+);

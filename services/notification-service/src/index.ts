@@ -1,5 +1,6 @@
 import {
-    ROUTING_KEYS
+    COMMERCE_TOPOLOGY,
+    QUEUES
 } from "@commerce-flow/contracts";
 import {
     createStructuredLogger
@@ -52,7 +53,10 @@ const rabbitMq =
     new RabbitMqClient(
         rabbitMqUrl,
         "commerce.events",
-        {},
+        {
+            topology:
+                COMMERCE_TOPOLOGY
+        },
         {
             logger:
                 logger.child({
@@ -76,12 +80,7 @@ const rabbitMqSupervisor =
         rabbitMq,
         async signal => {
             await rabbitMq.subscribe({
-                queueName:
-                    "notification-service.customer-events",
-                routingKeys: [
-                    ROUTING_KEYS.DeliveryBooked,
-                    ROUTING_KEYS.InventoryReservationFailed
-                ],
+                ...QUEUES.notificationCustomerEvents,
                 parseEvent:
                     parseNotificationEvent,
                 handler:

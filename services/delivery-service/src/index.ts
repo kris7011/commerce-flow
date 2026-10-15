@@ -1,4 +1,6 @@
 import {
+    COMMERCE_TOPOLOGY,
+    QUEUES,
     ROUTING_KEYS,
     parseInventoryReservedEvent
 } from "@commerce-flow/contracts";
@@ -53,7 +55,10 @@ const rabbitMq =
     new RabbitMqClient(
         rabbitMqUrl,
         "commerce.events",
-        {},
+        {
+            topology:
+                COMMERCE_TOPOLOGY
+        },
         {
             logger:
                 logger.child({
@@ -89,11 +94,7 @@ const rabbitMqSupervisor =
         rabbitMq,
         async signal => {
             await rabbitMq.subscribe({
-                queueName:
-                    "delivery-service.inventory-reserved",
-                routingKeys: [
-                    ROUTING_KEYS.InventoryReserved
-                ],
+                ...QUEUES.deliveryInventoryReserved,
                 parseEvent:
                     parseInventoryReservedEvent,
                 handler:

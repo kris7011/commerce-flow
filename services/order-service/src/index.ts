@@ -1,4 +1,5 @@
 import {
+    COMMERCE_TOPOLOGY,
     ROUTING_KEYS
 } from "@commerce-flow/contracts";
 import {
@@ -53,7 +54,9 @@ const rabbitMq =
             // Bounds how long an HTTP request waits for the broker
             // before answering 503.
             publishTimeoutInMs:
-                5_000
+                5_000,
+            topology:
+                COMMERCE_TOPOLOGY
         },
         {
             logger:

@@ -1,4 +1,6 @@
 import {
+    COMMERCE_TOPOLOGY,
+    QUEUES,
     ROUTING_KEYS,
     parseOrderCreatedEvent
 } from "@commerce-flow/contracts";
@@ -53,7 +55,10 @@ const rabbitMq =
     new RabbitMqClient(
         rabbitMqUrl,
         "commerce.events",
-        {},
+        {
+            topology:
+                COMMERCE_TOPOLOGY
+        },
         {
             logger:
                 logger.child({
@@ -91,11 +96,7 @@ const rabbitMqSupervisor =
         rabbitMq,
         async signal => {
             await rabbitMq.subscribe({
-                queueName:
-                    "payment-service.order-created",
-                routingKeys: [
-                    ROUTING_KEYS.OrderCreated
-                ],
+                ...QUEUES.paymentOrderCreated,
                 parseEvent:
                     parseOrderCreatedEvent,
                 handler:
