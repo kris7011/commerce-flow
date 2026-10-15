@@ -13,6 +13,10 @@
     },
     "scripts": {
         "build": "tsc -p tsconfig.json",
-        "typecheck": "tsc -p tsconfig.json --noEmit"
+        "typecheck": "tsc -p tests/tsconfig.json --noEmit",
+        "test": "node --import tsx --test tests/schemas.test.ts tests/identifiers.test.ts"
+    },
+    "dependencies": {
+        "zod": "^4.4.3"
     }
 }
