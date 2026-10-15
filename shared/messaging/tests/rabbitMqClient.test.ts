@@ -2221,6 +2221,87 @@ test(
 );
 
 test(
+    "cancels only the consumers of the current channel after a reconnect",
+    async () => {
+        const firstChannel =
+            new FakeChannel();
+
+        const secondChannel =
+            new FakeChannel();
+
+        const connections = [
+            new FakeConnection(
+                firstChannel
+            ),
+            new FakeConnection(
+                secondChannel
+            )
+        ];
+
+        let connectCalls =
+            0;
+
+        const client =
+            createClient(
+                connections[0]!,
+                {},
+                {
+                    connect:
+                        async () => {
+                            const connection =
+                                connections[connectCalls];
+
+                            connectCalls +=
+                                1;
+
+                            assert.ok(
+                                connection
+                            );
+
+                            return connection;
+                        }
+                }
+            );
+
+        const handler =
+            async () =>
+                undefined;
+
+        await subscribeTestHandler(
+            client,
+            [
+                "test.event"
+            ],
+            handler
+        );
+
+        firstChannel.triggerClose();
+
+        await subscribeTestHandler(
+            client,
+            [
+                "test.event"
+            ],
+            handler
+        );
+
+        await client.close();
+
+        assert.deepEqual(
+            firstChannel.cancelledConsumerTags,
+            []
+        );
+
+        assert.deepEqual(
+            secondChannel.cancelledConsumerTags,
+            [
+                "fake-consumer"
+            ]
+        );
+    }
+);
+
+test(
     "bounds the in-memory duplicate cache",
     async () => {
         const channel =

@@ -782,10 +782,23 @@ export class RabbitMqClient {
                     }
                 );
 
-        this.activeConsumers.push({
-            channel,
-            consumerTag
-        });
+        // Consumers of channels that closed (before a reconnect) are
+        // gone on the broker side; forget them so the list stays small.
+        const currentConsumers =
+            this.activeConsumers.filter(
+                consumer =>
+                    consumer.channel === channel
+            );
+
+        this.activeConsumers.splice(
+            0,
+            this.activeConsumers.length,
+            ...currentConsumers,
+            {
+                channel,
+                consumerTag
+            }
+        );
 
         throwIfAborted(
             signal

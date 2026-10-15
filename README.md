@@ -405,6 +405,7 @@ GitHub Actions ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs on 
 * **Outbox retention.** Published rows are kept indefinitely. Production would prune them.
 * **Observability** is limited to structured logs, readiness and the outbox diagnostics endpoint. There are no metrics backend or distributed traces (OpenTelemetry would be the next step).
 * **The services are not containerised.** Docker Compose provides only the infrastructure, and the services run from source with `tsx`.
+* **Windows test flakiness.** On Windows with Docker Desktop, a service process occasionally terminates with a native fast-fail (`0xC0000409`) while the RabbitMQ container restarts during the recovery E2E test (about 2 in 15 local runs). The process dies in native code, so no JavaScript handler can intercept it. It does not reproduce on Linux CI or with 1,000 simulated handshake failures in isolation. JavaScript-level fatal errors are logged before a controlled exit; a production deployment would rely on a process supervisor's restart policy for native crashes.
 
 ---
 

@@ -47,12 +47,38 @@ class FakeProcess
         return this;
     }
 
+    private readonly errorListeners =
+        new Map<string, (error: unknown) => void>();
+
+    on(
+        event: "uncaughtException" | "unhandledRejection",
+        listener: (error: unknown) => void
+    ): this {
+        this.errorListeners.set(
+            event,
+            listener
+        );
+
+        return this;
+    }
+
     emit(
         event: "SIGINT" | "SIGTERM"
     ): void {
         this.listeners.get(
             event
         )?.();
+    }
+
+    emitError(
+        event: "uncaughtException" | "unhandledRejection",
+        error: unknown
+    ): void {
+        this.errorListeners.get(
+            event
+        )?.(
+            error
+        );
     }
 
     exit(
@@ -275,6 +301,58 @@ test(
         assert.equal(
             released,
             true
+        );
+
+        assert.deepEqual(
+            fakeProcess.exitCodes,
+            [
+                1
+            ]
+        );
+    }
+);
+
+test(
+    "logs an uncaught exception and exits with a failure code",
+    async () => {
+        const fakeProcess =
+            new FakeProcess();
+
+        const errors: string[] = [];
+
+        const logger:
+            AppLogger = {
+            ...silentLogger,
+            error: message => {
+                errors.push(
+                    message
+                );
+            }
+        };
+
+        await runService({
+            port: 0,
+            requestListener:
+                (_request, response) => {
+                    response.end();
+                },
+            logger,
+            process:
+                fakeProcess
+        });
+
+        fakeProcess.emitError(
+            "uncaughtException",
+            new Error(
+                "unexpected socket error"
+            )
+        );
+
+        await fakeProcess.exited;
+
+        assert.equal(
+            errors[0],
+            "Uncaught exception"
         );
 
         assert.deepEqual(

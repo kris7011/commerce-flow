@@ -395,7 +395,8 @@ export class ServiceCluster {
         return this.history
             .map(
                 service =>
-                    `--- ${service.name} (pid ${service.process.pid}) ---\n` +
+                    `--- ${service.name} (pid ${service.process.pid}, ` +
+                    `${describeExit(service.process)}) ---\n` +
                     (service.output.join("").trim() || "(no output)")
             )
             .join(
@@ -423,7 +424,8 @@ export class ServiceCluster {
                     )
                 ) {
                     throw new Error(
-                        `${name} exited before becoming ${state}.`
+                        `${name} exited before becoming ${state} ` +
+                        `(${describeExit(service?.process)}).`
                     );
                 }
 
@@ -655,4 +657,18 @@ async function terminate(
 
         await exited;
     }
+}
+
+function describeExit(
+    child: ChildProcess | undefined
+): string {
+    if (!child) {
+        return "not started";
+    }
+
+    if (!hasExited(child)) {
+        return "running";
+    }
+
+    return `exit code ${String(child.exitCode)}, signal ${String(child.signalCode)}`;
 }

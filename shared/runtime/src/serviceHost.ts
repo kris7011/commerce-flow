@@ -25,6 +25,11 @@ export interface ProcessLike {
         listener: () => void
     ): unknown;
 
+    on(
+        event: "uncaughtException" | "unhandledRejection",
+        listener: (error: unknown) => void
+    ): unknown;
+
     exit(
         code: number
     ): void;
@@ -179,6 +184,37 @@ export async function runService(
             exitCode
         );
     }
+
+    // A programming error must never kill the process silently: log it
+    // in the structured format, then shut down with a failure code so
+    // the orchestrator restarts the service.
+    const onFatalError =
+        (kind: string) =>
+            (error: unknown): void => {
+                logger.error(
+                    kind,
+                    error
+                );
+
+                void shutdown(
+                    kind,
+                    1
+                );
+            };
+
+    processLike.on(
+        "uncaughtException",
+        onFatalError(
+            "Uncaught exception"
+        )
+    );
+
+    processLike.on(
+        "unhandledRejection",
+        onFatalError(
+            "Unhandled promise rejection"
+        )
+    );
 
     processLike.once(
         "SIGINT",
