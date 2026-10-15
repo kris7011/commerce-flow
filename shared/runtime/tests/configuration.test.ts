@@ -83,6 +83,42 @@ test(
 );
 
 test(
+    "refuses development connection defaults in production",
+    () => {
+        assert.throws(
+            () =>
+                readUrl(
+                    {
+                        NODE_ENV: "production"
+                    },
+                    "DATABASE_URL",
+                    "postgresql://dev:dev@localhost/app",
+                    [
+                        "postgresql:"
+                    ]
+                ),
+            /DATABASE_URL must be set when NODE_ENV is 'production'/
+        );
+
+        assert.equal(
+            readUrl(
+                {
+                    NODE_ENV: "production",
+                    DATABASE_URL:
+                        "postgresql://app@db.internal/app"
+                },
+                "DATABASE_URL",
+                "postgresql://dev:dev@localhost/app",
+                [
+                    "postgresql:"
+                ]
+            ),
+            "postgresql://app@db.internal/app"
+        );
+    }
+);
+
+test(
     "validates URL protocols without leaking credentials",
     () => {
         assert.equal(

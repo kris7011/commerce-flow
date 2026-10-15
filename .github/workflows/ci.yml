@@ -22,18 +22,22 @@ jobs:
     validate:
         name: Node.js ${{ matrix.node-version }}
         runs-on: ubuntu-latest
-        timeout-minutes: 10
+        timeout-minutes: 20
 
         strategy:
             fail-fast: false
             matrix:
+                # Supported Node.js LTS lines (Node.js 20 reached
+                # end-of-life in April 2026).
                 node-version:
-                    - 20.x
                     - 22.x
+                    - 24.x
 
         env:
             CI: true
             RABBITMQ_URL: amqp://guest:guest@localhost:5672
+            RABBITMQ_MANAGEMENT_URL: http://guest:guest@localhost:15672
+            TEST_DATABASE_ADMIN_URL: postgresql://commerce_flow:commerce_flow@localhost:5432/postgres
 
         steps:
             - name: Checkout repository
@@ -52,24 +56,33 @@ jobs:
             - name: Audit dependencies
               run: npm audit --audit-level=moderate
 
+            - name: Lint
+              run: npm run lint
+
             - name: Type-check project
               run: npm run typecheck
 
             - name: Build workspaces
               run: npm run build
 
-            - name: Run workspace unit tests
+            - name: Run unit tests
               run: npm test
 
-            - name: Start integration dependencies
+            # Start the containers while nothing else needs them yet;
+            # --wait blocks until the health checks pass.
+            - name: Start PostgreSQL and RabbitMQ
               run: docker compose up -d --wait rabbitmq postgres
 
-            - name: Run integration tests
+            - name: Run integration tests (PostgreSQL and RabbitMQ)
               run: npm run test:integration
 
-            - name: Run end-to-end tests
+            - name: Run end-to-end and recovery tests
               run: npm run test:e2e
 
-            - name: Stop integration dependencies
+            - name: Show infrastructure logs on failure
+              if: failure()
+              run: docker compose logs --no-color --tail=200
+
+            - name: Stop infrastructure
               if: always()
-              run: docker compose down
+              run: docker compose down --volumes

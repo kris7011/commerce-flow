@@ -55,6 +55,11 @@ export function createOrderApp(
 
     const app = express();
 
+    // Do not advertise the framework version to clients.
+    app.disable(
+        "x-powered-by"
+    );
+
     app.use(express.json());
 
     app.get(

@@ -262,7 +262,9 @@ async function withAdminClient<T>(
 ): Promise<T> {
     const client =
         new pg.Client({
-            connectionString
+            connectionString,
+            connectionTimeoutMillis:
+                10_000
         });
 
     await client.connect();

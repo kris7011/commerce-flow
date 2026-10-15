@@ -101,6 +101,10 @@ export function readPort(
 /**
  * Reads a connection URL and validates its protocol. Error messages
  * never include the value, which typically contains a password.
+ *
+ * The default is a development convenience only: with
+ * NODE_ENV=production the variable must be set explicitly, so a
+ * deployment can never silently connect with well-known credentials.
  */
 export function readUrl(
     environment: Environment,
@@ -108,6 +112,15 @@ export function readUrl(
     defaultValue: string,
     allowedProtocols: readonly string[]
 ): string {
+    if (
+        environment.NODE_ENV === "production" &&
+        !environment[name]?.trim()
+    ) {
+        throw new ConfigurationError(
+            `${name} must be set when NODE_ENV is 'production'.`
+        );
+    }
+
     const value =
         readString(
             environment,

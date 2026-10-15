@@ -5,8 +5,7 @@ import type {
     InventoryReservationFailedEvent
 } from "@commerce-flow/contracts";
 import {
-    NotificationService,
-    type CustomerNotification
+    NotificationService
 } from "../src/notificationService.js";
 
 const fixedTime =
