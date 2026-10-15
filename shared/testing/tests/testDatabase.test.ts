@@ -5,6 +5,9 @@ import {
     assertTestDatabaseName,
     isTestDatabaseName
 } from "../src/testDatabase.js";
+import {
+    assertTestVirtualHostName
+} from "../src/testVirtualHost.js";
 
 test(
     "recognises only generated test database names",
@@ -71,6 +74,32 @@ test(
                 fakePool
             ),
             /Refusing/
+        );
+    }
+);
+
+test(
+    "refuses to delete virtual hosts without the test prefix",
+    () => {
+        for (
+            const name of [
+                "/",
+                "commerce-flow",
+                "commerce-flow-test-",
+                "commerce-flow-test-zzzzzzzz"
+            ]
+        ) {
+            assert.throws(
+                () =>
+                    assertTestVirtualHostName(
+                        name
+                    ),
+                /Refusing to delete RabbitMQ virtual host/
+            );
+        }
+
+        assertTestVirtualHostName(
+            "commerce-flow-test-0a1b2c3d"
         );
     }
 );

@@ -8,6 +8,9 @@ import {
     type LogContext
 } from "@commerce-flow/logging";
 import {
+    ConfirmedPublisher
+} from "./confirmedPublisher.js";
+import {
     PermanentMessageError,
     PublishTimeoutError,
     getErrorMessage
@@ -61,9 +64,11 @@ export interface RabbitMqChannel {
     ): Promise<unknown>;
 
     /**
-     * Publishes on a confirm channel. The promise resolves only
-     * after the broker has acknowledged the message and rejects
-     * when the broker nacks it or the channel closes first.
+     * Publishes a mandatory message on a confirm channel. The promise
+     * resolves only after the broker has acknowledged the message and
+     * routed it to at least one queue. It rejects with
+     * UnroutableMessageError when the broker returns the message, and
+     * with an error when the broker nacks it or the channel closes first.
      */
     publish(
         exchangeName: string,
@@ -133,6 +138,20 @@ export interface RabbitMqClientOptions {
      * is the responsibility of each handler.
      */
     readonly recentEventIdCacheSize?: number;
+
+    /**
+     * Queues (with dead-letter queues and bindings) declared on every
+     * (re)connect, before anything is published. Provisioning the
+     * topology up front means events have a queue to land in even if
+     * their consumer has never started; mandatory publishing turns any
+     * remaining routing gap into a failed publication.
+     */
+    readonly topology?: readonly QueueTopology[];
+}
+
+export interface QueueTopology {
+    readonly queueName: string;
+    readonly routingKeys: readonly string[];
 }
 
 export interface RabbitMqClientDependencies {
@@ -458,6 +477,17 @@ export class RabbitMqClient {
                     signal
                 );
 
+                for (
+                    const queue
+                    of this.options.topology ?? []
+                ) {
+                    await this.declareQueue(
+                        channel,
+                        queue,
+                        signal
+                    );
+                }
+
                 this.logger.info(
                     "Connected to RabbitMQ exchange",
                     {
@@ -668,87 +698,19 @@ export class RabbitMqClient {
             );
         }
 
-        const deadLetterExchangeName =
-            `${this.exchangeName}` +
-            `.dead-letter`;
-
-        const deadLetterQueueName =
-            `${queueName}` +
-            `.dead-letter`;
-
-        const deadLetterRoutingKey =
-            `${queueName}` +
-            `.dead-letter`;
-
-        await channel
-            .assertExchange(
-                deadLetterExchangeName,
-                "topic",
+        const {
+            deadLetterExchangeName,
+            deadLetterQueueName,
+            deadLetterRoutingKey
+        } =
+            await this.declareQueue(
+                channel,
                 {
-                    durable: true
-                }
-            );
-
-        throwIfAborted(
-            signal
-        );
-
-        await channel
-            .assertQueue(
-                deadLetterQueueName,
-                {
-                    durable: true
-                }
-            );
-
-        throwIfAborted(
-            signal
-        );
-
-        await channel
-            .bindQueue(
-                deadLetterQueueName,
-                deadLetterExchangeName,
-                deadLetterRoutingKey
-            );
-
-        throwIfAborted(
-            signal
-        );
-
-        await channel
-            .assertQueue(
-                queueName,
-                {
-                    durable: true,
-                    arguments: {
-                        "x-dead-letter-exchange":
-                            deadLetterExchangeName,
-                        "x-dead-letter-routing-key":
-                            deadLetterRoutingKey
-                    }
-                }
-            );
-
-        throwIfAborted(
-            signal
-        );
-
-        for (
-            const routingKey
-            of routingKeys
-        ) {
-            await channel
-                .bindQueue(
                     queueName,
-                    this.exchangeName,
-                    routingKey
-                );
-
-            throwIfAborted(
+                    routingKeys
+                },
                 signal
             );
-        }
 
         await channel.prefetch(
             this.options.prefetchCount ??
@@ -845,6 +807,115 @@ export class RabbitMqClient {
 
         this.shutdownController =
             new AbortController();
+    }
+
+    /**
+     * Idempotently declares a durable queue, its dead-letter queue and
+     * its bindings. Used both for subscriptions and for provisioning
+     * the topology, so every declaration of a queue uses identical
+     * arguments (RabbitMQ rejects re-declarations that differ).
+     */
+    private async declareQueue(
+        channel: RabbitMqChannel,
+        queue: QueueTopology,
+        signal?: AbortSignal
+    ): Promise<{
+        deadLetterExchangeName: string;
+        deadLetterQueueName: string;
+        deadLetterRoutingKey: string;
+    }> {
+        const {
+            queueName,
+            routingKeys
+        } = queue;
+
+        const deadLetterExchangeName =
+            `${this.exchangeName}` +
+            `.dead-letter`;
+
+        const deadLetterQueueName =
+            `${queueName}` +
+            `.dead-letter`;
+
+        const deadLetterRoutingKey =
+            `${queueName}` +
+            `.dead-letter`;
+
+        await channel
+            .assertExchange(
+                deadLetterExchangeName,
+                "topic",
+                {
+                    durable: true
+                }
+            );
+
+        throwIfAborted(
+            signal
+        );
+
+        await channel
+            .assertQueue(
+                deadLetterQueueName,
+                {
+                    durable: true
+                }
+            );
+
+        throwIfAborted(
+            signal
+        );
+
+        await channel
+            .bindQueue(
+                deadLetterQueueName,
+                deadLetterExchangeName,
+                deadLetterRoutingKey
+            );
+
+        throwIfAborted(
+            signal
+        );
+
+        await channel
+            .assertQueue(
+                queueName,
+                {
+                    durable: true,
+                    arguments: {
+                        "x-dead-letter-exchange":
+                            deadLetterExchangeName,
+                        "x-dead-letter-routing-key":
+                            deadLetterRoutingKey
+                    }
+                }
+            );
+
+        throwIfAborted(
+            signal
+        );
+
+        for (
+            const routingKey
+            of routingKeys
+        ) {
+            await channel
+                .bindQueue(
+                    queueName,
+                    this.exchangeName,
+                    routingKey
+                );
+
+            throwIfAborted(
+                signal
+            );
+        }
+
+        return {
+            deadLetterExchangeName,
+            deadLetterQueueName,
+            deadLetterRoutingKey
+        };
     }
 
     private async handleDelivery<
@@ -1402,6 +1473,11 @@ async function connectToRabbitMq(
                     () => undefined
                 );
 
+                const confirmedPublisher =
+                    new ConfirmedPublisher(
+                        channel
+                    );
+
                 return {
                     assertExchange:
                         async (
@@ -1457,47 +1533,13 @@ async function connectToRabbitMq(
                             routingKey,
                             content,
                             options
-                        ) => {
-                            return new Promise<void>(
-                                (
-                                    resolve,
-                                    reject
-                                ) => {
-                                    try {
-                                        channel.publish(
-                                            exchangeName,
-                                            routingKey,
-                                            content,
-                                            options,
-                                            (error: unknown) => {
-                                                if (
-                                                    error === null ||
-                                                    error === undefined
-                                                ) {
-                                                    resolve();
-
-                                                    return;
-                                                }
-
-                                                reject(
-                                                    error instanceof Error
-                                                        ? error
-                                                        : new Error(
-                                                            getErrorMessage(
-                                                                error
-                                                            )
-                                                        )
-                                                );
-                                            }
-                                        );
-                                    } catch (error) {
-                                        reject(
-                                            error
-                                        );
-                                    }
-                                }
-                            );
-                        },
+                        ) =>
+                            confirmedPublisher.publish(
+                                exchangeName,
+                                routingKey,
+                                content,
+                                options
+                            ),
 
                     consume:
                         async (

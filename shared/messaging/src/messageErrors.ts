@@ -38,6 +38,30 @@ export class PublishTimeoutError extends Error {
     }
 }
 
+/**
+ * RabbitMQ returned a mandatory message because no queue was bound
+ * for its routing key. The broker still sends a positive publisher
+ * confirm afterwards, so without this error the message would be
+ * reported as published although it was discarded.
+ */
+export class UnroutableMessageError extends Error {
+    constructor(
+        readonly exchange: string,
+        readonly routingKey: string,
+        readonly replyCode: number,
+        readonly replyText: string
+    ) {
+        super(
+            `RabbitMQ could not route the message: exchange ` +
+            `'${exchange}', routing key '${routingKey}' ` +
+            `(${replyCode} ${replyText}).`
+        );
+
+        this.name =
+            "UnroutableMessageError";
+    }
+}
+
 export function getErrorMessage(
     error: unknown
 ): string {

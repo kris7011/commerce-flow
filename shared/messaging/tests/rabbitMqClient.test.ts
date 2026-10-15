@@ -2302,6 +2302,75 @@ test(
 );
 
 test(
+    "provisions the configured topology on connect, before any publish",
+    async () => {
+        const channel =
+            new FakeChannel();
+
+        const client =
+            createClient(
+                new FakeConnection(
+                    channel
+                ),
+                {
+                    topology: [
+                        {
+                            queueName:
+                                "payment-service.order-created",
+                            routingKeys: [
+                                "order.created"
+                            ]
+                        }
+                    ]
+                }
+            );
+
+        await client.publish(
+            "order.created",
+            createTestEvent()
+        );
+
+        assert.deepEqual(
+            channel.bindQueueCalls,
+            [
+                {
+                    queueName:
+                        "payment-service.order-created.dead-letter",
+                    exchangeName:
+                        "commerce.events.dead-letter",
+                    routingKey:
+                        "payment-service.order-created.dead-letter"
+                },
+                {
+                    queueName:
+                        "payment-service.order-created",
+                    exchangeName:
+                        "commerce.events",
+                    routingKey:
+                        "order.created"
+                }
+            ]
+        );
+
+        assert.deepEqual(
+            channel.assertQueueCalls.map(
+                call =>
+                    call.queueName
+            ),
+            [
+                "payment-service.order-created.dead-letter",
+                "payment-service.order-created"
+            ]
+        );
+
+        assert.equal(
+            channel.publishCalls.length,
+            1
+        );
+    }
+);
+
+test(
     "bounds the in-memory duplicate cache",
     async () => {
         const channel =
