@@ -185,6 +185,10 @@ interface ActiveConsumer {
     readonly consumerTag: string;
 }
 
+/** Development-only default broker URL (guest account on localhost). */
+export const DEVELOPMENT_RABBITMQ_URL =
+    "amqp://guest:guest@localhost:5672";
+
 const DEFAULTS = {
     maxConnectionRetries: 10,
     retryDelayInMs: 2_000,
@@ -594,7 +598,13 @@ export class RabbitMqClient {
                 );
             }
 
-            throw error;
+            throw new Error(
+                `[messaging] Failed to publish event ${event.eventId} ` +
+                `to '${routingKey}': ${getErrorMessage(error)}`,
+                {
+                    cause: error
+                }
+            );
         }
 
         this.logger.info(

@@ -5,9 +5,15 @@ import {
     createStructuredLogger
 } from "@commerce-flow/logging";
 import {
+    DEVELOPMENT_RABBITMQ_URL,
     RabbitMqClient,
     RabbitMqSupervisor
 } from "@commerce-flow/messaging";
+import {
+    readPort,
+    readUrl,
+    runService
+} from "@commerce-flow/runtime";
 import {
     createNotificationApp
 } from "./app.js";
@@ -19,25 +25,41 @@ import {
     parseNotificationEvent
 } from "./notificationService.js";
 
-const port =
-    Number(
-        process.env
-            .NOTIFICATION_SERVICE_PORT ??
-        3005
-    );
-
-const rabbitMqUrl =
-    process.env.RABBITMQ_URL ??
-    "amqp://guest:guest@localhost:5672";
-
 const logger =
     createStructuredLogger(
         "notification-service"
     );
 
+const port =
+    readPort(
+        process.env,
+        "NOTIFICATION_SERVICE_PORT",
+        3005
+    );
+
+const rabbitMqUrl =
+    readUrl(
+        process.env,
+        "RABBITMQ_URL",
+        DEVELOPMENT_RABBITMQ_URL,
+        [
+            "amqp:",
+            "amqps:"
+        ]
+    );
+
 const rabbitMq =
     new RabbitMqClient(
-        rabbitMqUrl
+        rabbitMqUrl,
+        "commerce.events",
+        {},
+        {
+            logger:
+                logger.child({
+                    component:
+                        "messaging"
+                })
+        }
     );
 
 const notificationService =
@@ -48,9 +70,6 @@ const handleNotificationEvent =
         notificationService,
         logger
     });
-
-const supervisorController =
-    new AbortController();
 
 const rabbitMqSupervisor =
     new RabbitMqSupervisor(
@@ -76,55 +95,27 @@ const rabbitMqSupervisor =
         }
     );
 
-const app =
-    createNotificationApp({
-        notificationReader:
-            notificationService,
-        readinessProbe:
-            rabbitMqSupervisor
-    });
-
-function start(): void {
-    app.listen(
-        port,
-        () => {
-            logger.info(
-                "Service listening",
-                {
-                    port
-                }
-            );
+await runService({
+    port,
+    requestListener:
+        createNotificationApp({
+            notificationReader:
+                notificationService,
+            readinessProbe:
+                rabbitMqSupervisor
+        }),
+    logger,
+    backgroundTasks: [
+        {
+            name:
+                "rabbitmq-supervisor",
+            run: signal =>
+                rabbitMqSupervisor.run(
+                    signal
+                )
         }
-    );
-
-    void rabbitMqSupervisor
-        .run(
-            supervisorController.signal
-        )
-        .catch(error => {
-            logger.error(
-                "RabbitMQ supervisor stopped unexpectedly",
-                error,
-                {
-                    port
-                }
-            );
-        });
-}
-
-start();
-
-process.on(
-    "SIGINT",
-    async () => {
-        logger.info(
-            "Service shutting down"
-        );
-
-        supervisorController.abort();
-
+    ],
+    async stop() {
         await rabbitMq.close();
-
-        process.exit(0);
     }
-);
+});

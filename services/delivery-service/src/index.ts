@@ -6,9 +6,15 @@ import {
     createStructuredLogger
 } from "@commerce-flow/logging";
 import {
+    DEVELOPMENT_RABBITMQ_URL,
     RabbitMqClient,
     RabbitMqSupervisor
 } from "@commerce-flow/messaging";
+import {
+    readPort,
+    readUrl,
+    runService
+} from "@commerce-flow/runtime";
 import {
     createDeliveryApp
 } from "./app.js";
@@ -20,36 +26,51 @@ import {
     type DeliveryBookedPublisher
 } from "./inventoryReservedHandler.js";
 
-const port =
-    Number(
-        process.env.DELIVERY_SERVICE_PORT ??
-        3004
-    );
-
-const rabbitMqUrl =
-    process.env.RABBITMQ_URL ??
-    "amqp://guest:guest@localhost:5672";
-
 const logger =
     createStructuredLogger(
         "delivery-service"
     );
 
-const rabbitMq =
-    new RabbitMqClient(
-        rabbitMqUrl
+const port =
+    readPort(
+        process.env,
+        "DELIVERY_SERVICE_PORT",
+        3004
     );
 
-const deliveryService =
-    new DeliveryService();
+const rabbitMqUrl =
+    readUrl(
+        process.env,
+        "RABBITMQ_URL",
+        DEVELOPMENT_RABBITMQ_URL,
+        [
+            "amqp:",
+            "amqps:"
+        ]
+    );
 
+const rabbitMq =
+    new RabbitMqClient(
+        rabbitMqUrl,
+        "commerce.events",
+        {},
+        {
+            logger:
+                logger.child({
+                    component:
+                        "messaging"
+                })
+        }
+    );
+
+// Publish-then-ack with deterministic ids, see payment-service.
 const deliveryBookedPublisher:
     DeliveryBookedPublisher = {
     async publishDeliveryBooked(
         event
     ): Promise<void> {
         await rabbitMq.publish(
-            "delivery.booked",
+            ROUTING_KEYS.DeliveryBooked,
             event
         );
     }
@@ -57,13 +78,11 @@ const deliveryBookedPublisher:
 
 const handleInventoryReserved =
     createInventoryReservedHandler({
-        deliveryService,
+        deliveryService:
+            new DeliveryService(),
         deliveryBookedPublisher,
         logger
     });
-
-const supervisorController =
-    new AbortController();
 
 const rabbitMqSupervisor =
     new RabbitMqSupervisor(
@@ -88,53 +107,25 @@ const rabbitMqSupervisor =
         }
     );
 
-const app =
-    createDeliveryApp({
-        readinessProbe:
-            rabbitMqSupervisor
-    });
-
-function start(): void {
-    app.listen(
-        port,
-        () => {
-            logger.info(
-                "Service listening",
-                {
-                    port
-                }
-            );
+await runService({
+    port,
+    requestListener:
+        createDeliveryApp({
+            readinessProbe:
+                rabbitMqSupervisor
+        }),
+    logger,
+    backgroundTasks: [
+        {
+            name:
+                "rabbitmq-supervisor",
+            run: signal =>
+                rabbitMqSupervisor.run(
+                    signal
+                )
         }
-    );
-
-    void rabbitMqSupervisor
-        .run(
-            supervisorController.signal
-        )
-        .catch(error => {
-            logger.error(
-                "RabbitMQ supervisor stopped unexpectedly",
-                error,
-                {
-                    port
-                }
-            );
-        });
-}
-
-start();
-
-process.on(
-    "SIGINT",
-    async () => {
-        logger.info(
-            "Service shutting down"
-        );
-
-        supervisorController.abort();
-
+    ],
+    async stop() {
         await rabbitMq.close();
-
-        process.exit(0);
     }
-);
+});

@@ -14,6 +14,7 @@
         "@commerce-flow/contracts": "file:../../shared/contracts",
         "@commerce-flow/logging": "file:../../shared/logging",
         "@commerce-flow/messaging": "file:../../shared/messaging",
+        "@commerce-flow/runtime": "file:../../shared/runtime",
         "express": "^4.18.3"
     }
 }

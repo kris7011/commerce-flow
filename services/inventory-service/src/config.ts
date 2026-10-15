@@ -6,12 +6,11 @@ import {
     type Environment
 } from "@commerce-flow/runtime";
 import {
+    DEVELOPMENT_RABBITMQ_URL
+} from "@commerce-flow/messaging";
+import {
     DEFAULT_DATABASE_URL
 } from "./database.js";
-
-/** Development-only default; production must set RABBITMQ_URL. */
-const DEFAULT_RABBITMQ_URL =
-    "amqp://guest:guest@localhost:5672";
 
 export interface InventoryConfig {
     readonly port: number;
@@ -80,7 +79,7 @@ export function readInventoryConfig(
             readUrl(
                 environment,
                 "RABBITMQ_URL",
-                DEFAULT_RABBITMQ_URL,
+                DEVELOPMENT_RABBITMQ_URL,
                 [
                     "amqp:",
                     "amqps:"

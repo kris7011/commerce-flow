@@ -6,9 +6,15 @@ import {
     createStructuredLogger
 } from "@commerce-flow/logging";
 import {
+    DEVELOPMENT_RABBITMQ_URL,
     RabbitMqClient,
     RabbitMqSupervisor
 } from "@commerce-flow/messaging";
+import {
+    readPort,
+    readUrl,
+    runService
+} from "@commerce-flow/runtime";
 import {
     createPaymentApp
 } from "./app.js";
@@ -20,36 +26,53 @@ import {
     PaymentService
 } from "./paymentService.js";
 
-const port =
-    Number(
-        process.env.PAYMENT_SERVICE_PORT ??
-        3002
-    );
-
-const rabbitMqUrl =
-    process.env.RABBITMQ_URL ??
-    "amqp://guest:guest@localhost:5672";
-
 const logger =
     createStructuredLogger(
         "payment-service"
     );
 
-const rabbitMq =
-    new RabbitMqClient(
-        rabbitMqUrl
+const port =
+    readPort(
+        process.env,
+        "PAYMENT_SERVICE_PORT",
+        3002
     );
 
-const paymentService =
-    new PaymentService();
+const rabbitMqUrl =
+    readUrl(
+        process.env,
+        "RABBITMQ_URL",
+        DEVELOPMENT_RABBITMQ_URL,
+        [
+            "amqp:",
+            "amqps:"
+        ]
+    );
 
+const rabbitMq =
+    new RabbitMqClient(
+        rabbitMqUrl,
+        "commerce.events",
+        {},
+        {
+            logger:
+                logger.child({
+                    component:
+                        "messaging"
+                })
+        }
+    );
+
+// Publish-then-ack: if the process dies before the acknowledgement,
+// the OrderCreated message is redelivered and re-emits the identical
+// (deterministically identified) PaymentAuthorized event.
 const paymentAuthorizedPublisher:
     PaymentAuthorizedPublisher = {
     async publishPaymentAuthorized(
         event
     ): Promise<void> {
         await rabbitMq.publish(
-            "payment.authorized",
+            ROUTING_KEYS.PaymentAuthorized,
             event
         );
     }
@@ -57,13 +80,11 @@ const paymentAuthorizedPublisher:
 
 const handleOrderCreated =
     createOrderCreatedHandler({
-        paymentService,
+        paymentService:
+            new PaymentService(),
         paymentAuthorizedPublisher,
         logger
     });
-
-const supervisorController =
-    new AbortController();
 
 const rabbitMqSupervisor =
     new RabbitMqSupervisor(
@@ -88,53 +109,25 @@ const rabbitMqSupervisor =
         }
     );
 
-const app =
-    createPaymentApp({
-        readinessProbe:
-            rabbitMqSupervisor
-    });
-
-function start(): void {
-    app.listen(
-        port,
-        () => {
-            logger.info(
-                "Service listening",
-                {
-                    port
-                }
-            );
+await runService({
+    port,
+    requestListener:
+        createPaymentApp({
+            readinessProbe:
+                rabbitMqSupervisor
+        }),
+    logger,
+    backgroundTasks: [
+        {
+            name:
+                "rabbitmq-supervisor",
+            run: signal =>
+                rabbitMqSupervisor.run(
+                    signal
+                )
         }
-    );
-
-    void rabbitMqSupervisor
-        .run(
-            supervisorController.signal
-        )
-        .catch(error => {
-            logger.error(
-                "RabbitMQ supervisor stopped unexpectedly",
-                error,
-                {
-                    port
-                }
-            );
-        });
-}
-
-start();
-
-process.on(
-    "SIGINT",
-    async () => {
-        logger.info(
-            "Service shutting down"
-        );
-
-        supervisorController.abort();
-
+    ],
+    async stop() {
         await rabbitMq.close();
-
-        process.exit(0);
     }
-);
+});

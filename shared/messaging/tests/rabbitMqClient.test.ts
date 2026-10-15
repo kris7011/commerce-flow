@@ -1640,7 +1640,7 @@ test(
             ),
             {
                 message:
-                    "message nacked"
+                    /Failed to publish event event-001 to 'test.event': message nacked/
             }
         );
 
@@ -1729,7 +1729,7 @@ test(
             ),
             {
                 message:
-                    "channel closed"
+                    /Failed to publish event event-001 to 'test.event': channel closed/
             }
         );
 
