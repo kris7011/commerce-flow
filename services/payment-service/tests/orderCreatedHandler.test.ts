@@ -16,8 +16,9 @@ import {
     PaymentService
 } from "../src/paymentService.js";
 
+// PaymentAuthorized is recorded as of the order it authorizes.
 const fixedTime =
-    "2026-08-02T13:00:00.000Z";
+    "2026-08-02T12:59:00.000Z";
 
 test(
     "authorizes payment and publishes PaymentAuthorized",
@@ -281,9 +282,7 @@ function createPaymentService(
             currentIndex += 1;
 
             return generatedId;
-        },
-        getCurrentTime: () =>
-            fixedTime
+        }
     });
 }
 
@@ -295,7 +294,7 @@ function createOrderCreatedEvent():
         eventType:
             "OrderCreated",
         occurredAt:
-            "2026-08-02T12:59:00.000Z",
+            fixedTime,
         correlationId:
             "correlation-001",
         data: {

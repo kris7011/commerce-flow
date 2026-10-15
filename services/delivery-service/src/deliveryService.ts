@@ -8,11 +8,9 @@ export interface DeliveryServiceDependencies {
     /**
      * Overrides id generation (used by tests). By default the event id
      * is derived from the source event and the delivery id from the
-     * order, so a redelivered InventoryReserved message re-emits an
-     * identical, recognisable DeliveryBooked event.
+     * order.
      */
     generateId?: () => string;
-    getCurrentDate?: () => Date;
 }
 
 const DEFAULT_CARRIER = "DefaultCarrier";
@@ -20,22 +18,29 @@ const DELIVERY_TIME_IN_DAYS = 3;
 
 export class DeliveryService {
     private readonly generateId: (() => string) | undefined;
-    private readonly getCurrentDate: () => Date;
 
     constructor(
         dependencies: DeliveryServiceDependencies = {}
     ) {
         this.generateId =
             dependencies.generateId;
-
-        this.getCurrentDate =
-            dependencies.getCurrentDate ?? (() => new Date());
     }
 
+    /**
+     * The resulting event is a pure function of the source event, so a
+     * redelivered InventoryReserved message re-emits a byte-identical
+     * DeliveryBooked event. In particular the estimated delivery date
+     * is based on the reservation date, not on the processing date: a
+     * redelivery after midnight must not change the promised date
+     * under the same event id.
+     */
     bookDelivery(
         sourceEvent: InventoryReservedEvent
     ): DeliveryBookedEvent {
-        const currentDate = this.getCurrentDate();
+        const bookingDate =
+            new Date(
+                sourceEvent.occurredAt
+            );
 
         return {
             eventId: this.createId(
@@ -43,7 +48,7 @@ export class DeliveryService {
                 sourceEvent.eventId
             ),
             eventType: "DeliveryBooked",
-            occurredAt: currentDate.toISOString(),
+            occurredAt: sourceEvent.occurredAt,
             correlationId: sourceEvent.correlationId,
             data: {
                 orderId: sourceEvent.data.orderId,
@@ -54,7 +59,7 @@ export class DeliveryService {
                 carrier: DEFAULT_CARRIER,
                 estimatedDeliveryDate:
                     calculateEstimatedDeliveryDate(
-                        currentDate,
+                        bookingDate,
                         DELIVERY_TIME_IN_DAYS
                     )
             }

@@ -5,7 +5,8 @@ import type {
 } from "@commerce-flow/contracts";
 import { PaymentService } from "../src/paymentService.js";
 
-const fixedTime = "2026-07-31T09:00:00.000Z";
+// PaymentAuthorized is recorded as of the order it authorizes.
+const orderCreatedAt = "2026-07-31T08:59:00.000Z";
 
 test(
     "creates a payment authorized event from an order created event",
@@ -23,7 +24,7 @@ test(
         assert.deepEqual(result, {
             eventId: "payment-event-001",
             eventType: "PaymentAuthorized",
-            occurredAt: fixedTime,
+            occurredAt: orderCreatedAt,
             correlationId: "correlation-001",
             data: {
                 orderId: "order-001",
@@ -99,9 +100,7 @@ test(
 test(
     "re-emits an identical event when the same order event is redelivered",
     () => {
-        const paymentService = new PaymentService({
-            getCurrentTime: () => fixedTime
-        });
+        const paymentService = new PaymentService();
 
         const first = paymentService.authorizePayment(
             createOrderCreatedEvent()
@@ -119,6 +118,32 @@ test(
         );
 
         assert.notEqual(first.eventId, first.data.paymentId);
+    }
+);
+
+test(
+    "re-emits an identical event when the redelivery happens on a later date",
+    t => {
+        t.mock.timers.enable({
+            apis: ["Date"],
+            now: new Date("2026-07-31T23:59:30.000Z")
+        });
+
+        const paymentService = new PaymentService();
+
+        const first = paymentService.authorizePayment(
+            createOrderCreatedEvent()
+        );
+
+        // The broker redelivers the message two days later.
+        t.mock.timers.tick(2 * 24 * 60 * 60 * 1000);
+
+        const redelivered = paymentService.authorizePayment(
+            createOrderCreatedEvent()
+        );
+
+        assert.deepEqual(redelivered, first);
+        assert.equal(first.occurredAt, orderCreatedAt);
     }
 );
 
@@ -162,8 +187,7 @@ function createPaymentService(
             currentIndex += 1;
 
             return generatedId;
-        },
-        getCurrentTime: () => fixedTime
+        }
     });
 }
 
@@ -179,7 +203,7 @@ function createOrderCreatedEvent(
     return {
         eventId: "order-event-001",
         eventType: "OrderCreated",
-        occurredAt: "2026-07-31T08:59:00.000Z",
+        occurredAt: orderCreatedAt,
         correlationId:
             overrides.correlationId ??
             "correlation-001",

@@ -10,31 +10,33 @@ export interface PaymentServiceDependencies {
      * derived deterministically from the source event, see below.
      */
     generateId?: () => string;
-    getCurrentTime?: () => string;
 }
 
 export class PaymentService {
     private readonly generateId:
         (() => string) | undefined;
 
-    private readonly getCurrentTime: () => string;
-
     constructor(
         dependencies: PaymentServiceDependencies = {}
     ) {
         this.generateId =
             dependencies.generateId;
-
-        this.getCurrentTime =
-            dependencies.getCurrentTime ??
-            (() => new Date().toISOString());
     }
 
     /**
-     * Ids are derived from the source event: a redelivered
-     * OrderCreated message yields the same PaymentAuthorized event id
-     * and the same payment id (one payment per order), so downstream
-     * consumers recognise the re-emitted event as a duplicate.
+     * The resulting event is a pure function of the source event.
+     *
+     * A redelivered OrderCreated message (e.g. after a crash between
+     * publish and ack) therefore re-emits a byte-identical event: the
+     * same event id, the same payment id (one payment per order) and
+     * the same timestamp. An event id can never stand for two
+     * different outcomes, and downstream consumers can safely treat a
+     * repeated id as a duplicate.
+     *
+     * The simulated authorization is recorded as of the order it
+     * authorizes (occurredAt of the source event). A real payment
+     * integration would persist its outcome and publish it through an
+     * outbox instead of re-deriving it.
      */
     authorizePayment(
         sourceEvent: OrderCreatedEvent
@@ -54,7 +56,7 @@ export class PaymentService {
         return {
             eventId,
             eventType: "PaymentAuthorized",
-            occurredAt: this.getCurrentTime(),
+            occurredAt: sourceEvent.occurredAt,
             correlationId: sourceEvent.correlationId,
             data: {
                 orderId: sourceEvent.data.orderId,
