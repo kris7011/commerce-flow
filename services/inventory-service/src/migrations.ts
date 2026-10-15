@@ -146,6 +146,20 @@ export async function migrateInventoryDatabase(
     const client =
         await pool.connect();
 
+    let connectionError:
+        Error | undefined;
+
+    const onConnectionError =
+        (error: Error): void => {
+            connectionError =
+                error;
+        };
+
+    client.on(
+        "error",
+        onConnectionError
+    );
+
     try {
         await client.query(
             "BEGIN"
@@ -241,7 +255,14 @@ export async function migrateInventoryDatabase(
 
         throw error;
     } finally {
-        client.release();
+        client.off(
+            "error",
+            onConnectionError
+        );
+
+        client.release(
+            connectionError
+        );
     }
 }
 

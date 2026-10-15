@@ -6,40 +6,44 @@ import type {
 import type {
     AppLogger
 } from "@commerce-flow/logging";
-import {
-    InventoryService,
-    type InventoryResultEvent
+import type {
+    InventoryResultEvent,
+    InventoryService
 } from "./inventoryService.js";
-
-export interface InventoryResultPublisher {
-    publishInventoryResult(
-        event: InventoryResultEvent
-    ): Promise<void>;
-}
 
 export interface PaymentAuthorizedHandlerDependencies {
     readonly inventoryService:
-    InventoryService;
-
-    readonly inventoryResultPublisher:
-    InventoryResultPublisher;
+    Pick<InventoryService, "reserveForPayment">;
 
     readonly logger:
     AppLogger;
+
+    /**
+     * Called after a new outcome has been committed to the outbox,
+     * typically to wake the outbox relay without waiting for a poll.
+     */
+    readonly onEventEnqueued?:
+    () => void;
 }
 
 export type PaymentAuthorizedHandler = (
     event: PaymentAuthorizedEvent
 ) => Promise<void>;
 
+/**
+ * Message handler for PaymentAuthorized. It only records the decision;
+ * publishing happens asynchronously through the transactional outbox,
+ * so acknowledging the message never depends on RabbitMQ being able to
+ * accept the resulting event at that moment.
+ */
 export function createPaymentAuthorizedHandler(
     dependencies:
         PaymentAuthorizedHandlerDependencies
 ): PaymentAuthorizedHandler {
     const {
         inventoryService,
-        inventoryResultPublisher,
-        logger
+        logger,
+        onEventEnqueued
     } = dependencies;
 
     return async (
@@ -63,19 +67,38 @@ export function createPaymentAuthorizedHandler(
             }
         );
 
-        const resultEvent =
+        const outcome =
             await inventoryService
-                .processPaymentAuthorized(
+                .reserveForPayment(
                     event
                 );
 
-        await inventoryResultPublisher
-            .publishInventoryResult(
-                resultEvent
+        if (outcome.status === "Duplicate") {
+            logger.warn(
+                "Ignored duplicate PaymentAuthorized for an already processed order",
+                {
+                    eventId:
+                        event.eventId,
+                    orderId:
+                        event.data.orderId,
+                    correlationId:
+                        event.correlationId,
+                    originalSourceEventId:
+                        outcome.existing.sourceEventId,
+                    originalStatus:
+                        outcome.existing.status,
+                    originalResultEventId:
+                        outcome.existing.resultEventId
+                }
             );
 
+            return;
+        }
+
+        onEventEnqueued?.();
+
         logInventoryResult(
-            resultEvent,
+            outcome.event,
             logger
         );
     };

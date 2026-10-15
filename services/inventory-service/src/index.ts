@@ -10,9 +10,14 @@ import {
     RabbitMqSupervisor
 } from "@commerce-flow/messaging";
 import {
-    createInventoryApp,
-    type ReadinessProbe
+    runService
+} from "@commerce-flow/runtime";
+import {
+    createInventoryApp
 } from "./app.js";
+import {
+    readInventoryConfig
+} from "./config.js";
 import {
     createInventoryDatabasePool,
     initializeInventoryDatabase,
@@ -22,82 +27,101 @@ import {
     InventoryService
 } from "./inventoryService.js";
 import {
-    createPaymentAuthorizedHandler,
-    type InventoryResultPublisher
+    OutboxRelay
+} from "./outbox/outboxRelay.js";
+import {
+    PostgresOutboxStore
+} from "./outbox/postgresOutboxStore.js";
+import {
+    RabbitMqOutboxPublisher
+} from "./outbox/rabbitMqOutboxPublisher.js";
+import {
+    createPaymentAuthorizedHandler
 } from "./paymentAuthorizedHandler.js";
 import {
-    PostgresInventoryRepository
-} from "./postgresInventoryRepository.js";
+    PostgresInventoryStore
+} from "./postgresInventoryStore.js";
 
-const port =
-    Number(
-        process.env
-            .INVENTORY_SERVICE_PORT ??
-        3003
-    );
-
-const rabbitMqUrl =
-    process.env.RABBITMQ_URL ??
-    "amqp://guest:guest@localhost:5672";
+/*
+ * Composition root: the only place that knows about concrete adapters.
+ */
 
 const logger =
     createStructuredLogger(
         "inventory-service"
     );
 
-const rabbitMq =
-    new RabbitMqClient(
-        rabbitMqUrl
+const config =
+    readInventoryConfig(
+        process.env
     );
 
 const databasePool =
-    createInventoryDatabasePool();
+    createInventoryDatabasePool({
+        connectionString:
+            config.databaseUrl,
+        logger
+    });
 
-const inventoryRepository =
-    new PostgresInventoryRepository(
+const inventoryStore =
+    new PostgresInventoryStore(
         databasePool
     );
 
 const inventoryService =
     new InventoryService(
-        inventoryRepository
+        inventoryStore
     );
 
-const inventoryResultPublisher:
-    InventoryResultPublisher = {
-    async publishInventoryResult(
-        event
-    ): Promise<void> {
-        switch (event.eventType) {
-            case "InventoryReserved":
-                await rabbitMq.publish(
-                    "inventory.reserved",
-                    event
-                );
-                return;
-
-            case "InventoryReservationFailed":
-                await rabbitMq.publish(
-                    "inventory.reservation.failed",
-                    event
-                );
-                return;
-
-            default:
-                assertNever(event);
+const rabbitMq =
+    new RabbitMqClient(
+        config.rabbitMqUrl,
+        "commerce.events",
+        {
+            publishTimeoutInMs:
+                config.publishTimeoutInMs
+        },
+        {
+            logger:
+                logger.child({
+                    component:
+                        "messaging"
+                })
         }
-    }
-};
+    );
+
+const outboxStore =
+    new PostgresOutboxStore(
+        databasePool
+    );
+
+const outboxRelay =
+    new OutboxRelay(
+        {
+            store:
+                outboxStore,
+            publisher:
+                new RabbitMqOutboxPublisher(
+                    rabbitMq
+                ),
+            logger:
+                logger.child({
+                    component:
+                        "outbox-relay"
+                })
+        },
+        config.outbox
+    );
 
 const handlePaymentAuthorized =
     createPaymentAuthorizedHandler({
         inventoryService,
-        inventoryResultPublisher,
-        logger
+        logger,
+        onEventEnqueued:
+            () => {
+                outboxRelay.notify();
+            }
     });
-
-const supervisorController =
-    new AbortController();
 
 const rabbitMqSupervisor =
     new RabbitMqSupervisor(
@@ -122,132 +146,78 @@ const rabbitMqSupervisor =
         }
     );
 
-const databaseReadinessProbe:
-    ReadinessProbe = {
-    async isReady(): Promise<boolean> {
-        return isInventoryDatabaseReady(
-            databasePool
-        );
-    }
-};
-
 const app =
     createInventoryApp({
         stockReader:
-            inventoryRepository,
+            inventoryStore,
         rabbitMqReadinessProbe:
             rabbitMqSupervisor,
-        databaseReadinessProbe
+        databaseReadinessProbe: {
+            isReady: () =>
+                isInventoryDatabaseReady(
+                    databasePool
+                )
+        },
+        outboxDiagnosticsReader: {
+            async getOutboxDiagnostics() {
+                return {
+                    ...(await outboxStore.getStatistics()),
+                    relay:
+                        outboxRelay.getStatus()
+                };
+            }
+        },
+        logger
     });
 
-async function start():
-    Promise<void> {
-    await initializeInventoryDatabase(
-        databasePool
-    );
+await runService({
+    port:
+        config.port,
+    requestListener:
+        app,
+    logger,
 
-    app.listen(
-        port,
-        () => {
-            logger.info(
-                "Service listening",
-                {
-                    port
-                }
-            );
-        }
-    );
-
-    void rabbitMqSupervisor
-        .run(
-            supervisorController.signal
-        )
-        .catch(error => {
-            logger.error(
-                "RabbitMQ supervisor stopped unexpectedly",
-                error,
-                {
-                    port
-                }
-            );
-        });
-}
-
-void start()
-    .catch(
-        async error => {
-            logger.error(
-                "Service failed to start",
-                error,
-                {
-                    port
-                }
+    async start() {
+        const migration =
+            await initializeInventoryDatabase(
+                databasePool
             );
 
-            supervisorController.abort();
+        logger.info(
+            "Inventory database ready",
+            {
+                schemaVersion:
+                    migration.currentVersion,
+                appliedMigrations:
+                    migration.appliedVersions
+            }
+        );
+    },
 
-            await Promise.allSettled([
-                rabbitMq.close(),
-                databasePool.end()
-            ]);
-
-            process.exit(1);
-        }
-    );
-
-let shuttingDown =
-    false;
-
-async function shutdown(
-    signal: string
-): Promise<void> {
-    if (shuttingDown) {
-        return;
-    }
-
-    shuttingDown =
-        true;
-
-    logger.info(
-        "Service shutting down",
+    backgroundTasks: [
         {
-            signal
+            name:
+                "rabbitmq-supervisor",
+            run: signal =>
+                rabbitMqSupervisor.run(
+                    signal
+                )
+        },
+        {
+            name:
+                "outbox-relay",
+            run: signal =>
+                outboxRelay.run(
+                    signal
+                )
         }
-    );
+    ],
 
-    supervisorController.abort();
-
-    await Promise.allSettled([
-        rabbitMq.close(),
-        databasePool.end()
-    ]);
-
-    process.exit(0);
-}
-
-process.once(
-    "SIGINT",
-    () => {
-        void shutdown(
-            "SIGINT"
-        );
+    // Background tasks have stopped at this point: drain in-flight
+    // consumers first (they still use the database), then close the
+    // pool.
+    async stop() {
+        await rabbitMq.close();
+        await databasePool.end();
     }
-);
-
-process.once(
-    "SIGTERM",
-    () => {
-        void shutdown(
-            "SIGTERM"
-        );
-    }
-);
-
-function assertNever(
-    value: never
-): never {
-    throw new Error(
-        `Unsupported inventory result event: ` +
-        `${JSON.stringify(value)}`
-    );
-}
+});

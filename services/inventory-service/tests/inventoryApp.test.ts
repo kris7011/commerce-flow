@@ -14,8 +14,11 @@ import {
     type ReadinessProbe
 } from "../src/app.js";
 import {
-    InMemoryInventoryRepository
-} from "../src/inMemoryInventoryRepository.js";
+    InMemoryInventoryStore
+} from "../src/inMemoryInventoryStore.js";
+import {
+    InventoryService
+} from "../src/inventoryService.js";
 
 const readyProbe:
     ReadinessProbe = {
@@ -190,14 +193,27 @@ test(
         const repository =
             createRepository();
 
-        await repository.tryReserve([
+        await new InventoryService(
+            repository
+        ).reserveForPayment({
+            eventId: "payment-event-001",
+            eventType: "PaymentAuthorized",
+            occurredAt: "2026-08-05T11:59:00.000Z",
+            correlationId: "correlation-001",
+            data: {
+                orderId: "order-001",
+                paymentId: "payment-001",
+                amount: 9998,
+                items: [
             {
                 productId:
                     "washing-machine-01",
                 quantity: 2,
                 unitPrice: 4999
             }
-        ]);
+                ]
+            }
+        });
 
         const app =
             createInventoryApp({
@@ -301,9 +317,100 @@ test(
     }
 );
 
+test(
+    "exposes outbox diagnostics",
+    async () => {
+        const diagnostics = {
+            pendingCount: 2,
+            oldestPendingCreatedAt:
+                "2026-10-15T12:00:00.000Z",
+            maxPendingAttempts: 3
+        };
+
+        const app =
+            createInventoryApp({
+                stockReader:
+                    createRepository(),
+                rabbitMqReadinessProbe:
+                    readyProbe,
+                databaseReadinessProbe:
+                    readyProbe,
+                outboxDiagnosticsReader: {
+                    getOutboxDiagnostics:
+                        async () =>
+                            diagnostics
+                }
+            });
+
+        await withTestServer(
+            app,
+            async baseUrl => {
+                const response =
+                    await fetch(
+                        `${baseUrl}/diagnostics/outbox`
+                    );
+
+                assert.equal(
+                    response.status,
+                    200
+                );
+
+                assert.deepEqual(
+                    await response.json(),
+                    diagnostics
+                );
+            }
+        );
+    }
+);
+
+test(
+    "returns a generic 503 without internal details when storage fails",
+    async () => {
+        const app =
+            createInventoryApp({
+                stockReader: {
+                    getAllStock:
+                        async () => {
+                            throw new Error(
+                                "password authentication failed for user commerce_flow"
+                            );
+                        }
+                },
+                rabbitMqReadinessProbe:
+                    readyProbe,
+                databaseReadinessProbe:
+                    readyProbe
+            });
+
+        await withTestServer(
+            app,
+            async baseUrl => {
+                const response =
+                    await fetch(
+                        `${baseUrl}/stock`
+                    );
+
+                assert.equal(
+                    response.status,
+                    503
+                );
+
+                const body =
+                    await response.text();
+
+                assert.doesNotMatch(
+                    body,
+                    /password|commerce_flow|Error/
+                );
+            }
+        );
+    }
+);
+
 function createRepository():
-    InMemoryInventoryRepository {
-    return new InMemoryInventoryRepository({
+    InMemoryInventoryStore {
+    return new InMemoryInventoryStore({
         "washing-machine-01": 10,
         "dishwasher-01": 5,
         "dryer-01": 3

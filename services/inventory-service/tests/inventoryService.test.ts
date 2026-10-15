@@ -6,23 +6,28 @@ import type {
     OrderItem,
     PaymentAuthorizedEvent
 } from "@commerce-flow/contracts";
-import { InMemoryInventoryRepository } from "../src/inMemoryInventoryRepository.js";
+import { InMemoryInventoryStore } from "../src/inMemoryInventoryStore.js";
+import type {
+    InventoryTransaction,
+    InventoryUnitOfWork
+} from "../src/inventoryStore.js";
 import {
     InventoryService,
-    type InventoryResultEvent
+    type InventoryResultEvent,
+    type ReservationOutcome
 } from "../src/inventoryService.js";
 
 const fixedTime = "2026-07-31T08:00:00.000Z";
 
 test(
-    "reserves all requested items when sufficient stock is available",
+    "reserves all requested items and enqueues InventoryReserved atomically",
     async () => {
-        const repository = new InMemoryInventoryRepository({
+        const store = new InMemoryInventoryStore({
             "washing-machine-01": 10,
             "dishwasher-01": 5
         });
 
-        const service = createInventoryService(repository);
+        const service = createInventoryService(store);
 
         const sourceEvent = createPaymentAuthorizedEvent([
             {
@@ -37,81 +42,66 @@ test(
             }
         ]);
 
-        const result =
-            await service
-                .processPaymentAuthorized(
-                    sourceEvent
-                );
+        const outcome = await service.reserveForPayment(sourceEvent);
+        const result = getProcessedEvent(outcome);
 
         assertInventoryReserved(result);
 
         assert.equal(result.eventId, "generated-id-1");
-        assert.equal(
-            result.data.reservationId,
-            "generated-id-2"
-        );
+        assert.equal(result.data.reservationId, "generated-id-2");
         assert.equal(result.occurredAt, fixedTime);
-        assert.equal(
-            result.correlationId,
-            sourceEvent.correlationId
-        );
-        assert.equal(
-            result.data.orderId,
-            sourceEvent.data.orderId
-        );
-        assert.deepEqual(
-            result.data.items,
-            sourceEvent.data.items
-        );
+        assert.equal(result.correlationId, sourceEvent.correlationId);
+        assert.equal(result.data.orderId, sourceEvent.data.orderId);
+        assert.deepEqual(result.data.items, sourceEvent.data.items);
 
-        assert.deepEqual(await repository.getAllStock(), {
+        assert.deepEqual(await store.getAllStock(), {
             "washing-machine-01": 8,
             "dishwasher-01": 4
         });
+
+        assert.deepEqual(store.getOutbox(), [result]);
+
+        assert.deepEqual(store.getReservations(), [
+            {
+                orderId: "order-001",
+                status: "Reserved",
+                reservationId: "generated-id-2",
+                sourceEventId: "payment-event-001",
+                resultEventId: "generated-id-1",
+                items: sourceEvent.data.items
+            }
+        ]);
     }
 );
 
 test(
-    "does not reserve any stock when one product is unavailable",
+    "records InventoryReservationFailed without reserving any stock",
     async () => {
-        const repository = new InMemoryInventoryRepository({
+        const store = new InMemoryInventoryStore({
             "washing-machine-01": 10,
             "dryer-01": 3
         });
 
-        const service = createInventoryService(repository);
+        const service = createInventoryService(store);
 
-        const sourceEvent = createPaymentAuthorizedEvent([
-            {
-                productId: "washing-machine-01",
-                quantity: 2,
-                unitPrice: 4999
-            },
-            {
-                productId: "dryer-01",
-                quantity: 4,
-                unitPrice: 2999
-            }
-        ]);
+        const outcome = await service.reserveForPayment(
+            createPaymentAuthorizedEvent([
+                {
+                    productId: "washing-machine-01",
+                    quantity: 2,
+                    unitPrice: 4999
+                },
+                {
+                    productId: "dryer-01",
+                    quantity: 4,
+                    unitPrice: 2999
+                }
+            ])
+        );
 
-        const result =
-            await service
-                .processPaymentAuthorized(
-                    sourceEvent
-                );
+        const result = getProcessedEvent(outcome);
 
         assertInventoryReservationFailed(result);
-
-        assert.equal(result.eventId, "generated-id-1");
-        assert.equal(result.occurredAt, fixedTime);
-        assert.equal(
-            result.correlationId,
-            sourceEvent.correlationId
-        );
-        assert.equal(
-            result.data.orderId,
-            sourceEvent.data.orderId
-        );
 
         assert.equal(
             result.data.reason,
@@ -126,40 +116,41 @@ test(
             }
         ]);
 
-        assert.deepEqual(await repository.getAllStock(), {
+        assert.deepEqual(await store.getAllStock(), {
             "washing-machine-01": 10,
             "dryer-01": 3
         });
+
+        assert.deepEqual(store.getOutbox(), [result]);
+        assert.equal(store.getReservations()[0]?.status, "Rejected");
+        assert.equal(store.getReservations()[0]?.reservationId, null);
     }
 );
 
 test(
     "combines duplicate order lines before checking availability",
     async () => {
-        const repository = new InMemoryInventoryRepository({
+        const store = new InMemoryInventoryStore({
             "washing-machine-01": 10
         });
 
-        const service = createInventoryService(repository);
+        const outcome = await createInventoryService(store)
+            .reserveForPayment(
+                createPaymentAuthorizedEvent([
+                    {
+                        productId: "washing-machine-01",
+                        quantity: 6,
+                        unitPrice: 4999
+                    },
+                    {
+                        productId: "washing-machine-01",
+                        quantity: 6,
+                        unitPrice: 4999
+                    }
+                ])
+            );
 
-        const sourceEvent = createPaymentAuthorizedEvent([
-            {
-                productId: "washing-machine-01",
-                quantity: 6,
-                unitPrice: 4999
-            },
-            {
-                productId: "washing-machine-01",
-                quantity: 6,
-                unitPrice: 4999
-            }
-        ]);
-
-        const result =
-            await service
-                .processPaymentAuthorized(
-                    sourceEvent
-                );
+        const result = getProcessedEvent(outcome);
 
         assertInventoryReservationFailed(result);
 
@@ -170,35 +161,28 @@ test(
                 availableQuantity: 10
             }
         ]);
-
-        assert.deepEqual(await repository.getAllStock(), {
-            "washing-machine-01": 10
-        });
     }
 );
 
 test(
     "treats an unknown product as having zero available stock",
     async () => {
-        const repository = new InMemoryInventoryRepository({
+        const store = new InMemoryInventoryStore({
             "washing-machine-01": 10
         });
 
-        const service = createInventoryService(repository);
+        const outcome = await createInventoryService(store)
+            .reserveForPayment(
+                createPaymentAuthorizedEvent([
+                    {
+                        productId: "unknown-product",
+                        quantity: 1,
+                        unitPrice: 100
+                    }
+                ])
+            );
 
-        const sourceEvent = createPaymentAuthorizedEvent([
-            {
-                productId: "unknown-product",
-                quantity: 1,
-                unitPrice: 100
-            }
-        ]);
-
-        const result =
-            await service
-                .processPaymentAuthorized(
-                    sourceEvent
-                );
+        const result = getProcessedEvent(outcome);
 
         assertInventoryReservationFailed(result);
 
@@ -209,12 +193,181 @@ test(
                 availableQuantity: 0
             }
         ]);
+    }
+);
 
-        assert.deepEqual(await repository.getAllStock(), {
-            "washing-machine-01": 10
+test(
+    "ignores a redelivered PaymentAuthorized event for the same order",
+    async () => {
+        const store = new InMemoryInventoryStore({
+            "dryer-01": 3
+        });
+
+        const service = createInventoryService(store);
+
+        const sourceEvent = createPaymentAuthorizedEvent([
+            {
+                productId: "dryer-01",
+                quantity: 1,
+                unitPrice: 2999
+            }
+        ]);
+
+        const first = await service.reserveForPayment(sourceEvent);
+        const second = await service.reserveForPayment(sourceEvent);
+
+        assert.equal(first.status, "Processed");
+        assert.equal(second.status, "Duplicate");
+
+        assert.deepEqual(await store.getAllStock(), {
+            "dryer-01": 2
+        });
+
+        assert.equal(store.getOutbox().length, 1);
+    }
+);
+
+test(
+    "treats a different event for an already processed order as a duplicate",
+    async () => {
+        const store = new InMemoryInventoryStore({
+            "dryer-01": 3
+        });
+
+        const service = createInventoryService(store);
+
+        const items = [
+            {
+                productId: "dryer-01",
+                quantity: 1,
+                unitPrice: 2999
+            }
+        ];
+
+        await service.reserveForPayment(
+            createPaymentAuthorizedEvent(items)
+        );
+
+        const duplicate = await service.reserveForPayment({
+            ...createPaymentAuthorizedEvent(items),
+            eventId: "payment-event-retry-with-new-id"
+        });
+
+        assert.equal(duplicate.status, "Duplicate");
+
+        if (duplicate.status === "Duplicate") {
+            assert.equal(
+                duplicate.existing.sourceEventId,
+                "payment-event-001"
+            );
+        }
+
+        assert.deepEqual(await store.getAllStock(), {
+            "dryer-01": 2
         });
     }
 );
+
+test(
+    "processes concurrent duplicates of the same order only once",
+    async () => {
+        const store = new InMemoryInventoryStore({
+            "dryer-01": 3
+        });
+
+        const service = createInventoryService(store);
+
+        const sourceEvent = createPaymentAuthorizedEvent([
+            {
+                productId: "dryer-01",
+                quantity: 1,
+                unitPrice: 2999
+            }
+        ]);
+
+        const outcomes = await Promise.all(
+            Array.from(
+                { length: 5 },
+                () => service.reserveForPayment(sourceEvent)
+            )
+        );
+
+        assert.equal(
+            outcomes.filter(outcome => outcome.status === "Processed").length,
+            1
+        );
+
+        assert.deepEqual(await store.getAllStock(), {
+            "dryer-01": 2
+        });
+    }
+);
+
+test(
+    "leaves no partial changes when the outbox write fails",
+    async () => {
+        const store = new InMemoryInventoryStore({
+            "dryer-01": 3
+        });
+
+        const failingUnitOfWork: InventoryUnitOfWork = {
+            inTransaction: work =>
+                store.inTransaction(transaction =>
+                    work(
+                        withFailingOutbox(transaction)
+                    )
+                )
+        };
+
+        const service = new InventoryService(failingUnitOfWork);
+
+        await assert.rejects(
+            service.reserveForPayment(
+                createPaymentAuthorizedEvent([
+                    {
+                        productId: "dryer-01",
+                        quantity: 2,
+                        unitPrice: 2999
+                    }
+                ])
+            ),
+            /outbox unavailable/
+        );
+
+        assert.deepEqual(await store.getAllStock(), {
+            "dryer-01": 3
+        });
+
+        assert.deepEqual(store.getReservations(), []);
+        assert.deepEqual(store.getOutbox(), []);
+    }
+);
+
+function withFailingOutbox(
+    transaction: InventoryTransaction
+): InventoryTransaction {
+    return {
+        lockOrder: orderId => transaction.lockOrder(orderId),
+        lockStock: productIds => transaction.lockStock(productIds),
+        decrementStock: quantities => transaction.decrementStock(quantities),
+        recordReservation: record => transaction.recordReservation(record),
+        enqueueEvent: async () => {
+            throw new Error("outbox unavailable");
+        }
+    };
+}
+
+function getProcessedEvent(
+    outcome: ReservationOutcome
+): InventoryResultEvent {
+    assert.equal(outcome.status, "Processed");
+
+    if (outcome.status !== "Processed") {
+        throw new Error("Expected a processed outcome.");
+    }
+
+    return outcome.event;
+}
 
 function assertInventoryReserved(
     event: InventoryResultEvent
@@ -237,11 +390,11 @@ function assertInventoryReservationFailed(
 }
 
 function createInventoryService(
-    repository: InMemoryInventoryRepository
+    store: InMemoryInventoryStore
 ): InventoryService {
     let generatedIdNumber = 0;
 
-    return new InventoryService(repository, {
+    return new InventoryService(store, {
         generateId: () => {
             generatedIdNumber += 1;
 
