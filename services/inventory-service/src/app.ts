@@ -1,5 +1,8 @@
 import express from "express";
 import type {
+    AppLogger
+} from "@commerce-flow/logging";
+import type {
     Express,
     NextFunction,
     Request,
@@ -18,6 +21,11 @@ export interface ReadinessProbe {
         Promise<boolean>;
 }
 
+export interface OutboxDiagnosticsReader {
+    getOutboxDiagnostics():
+        Promise<Readonly<Record<string, unknown>>>;
+}
+
 export interface InventoryAppDependencies {
     readonly stockReader:
     InventoryStockReader;
@@ -27,6 +35,12 @@ export interface InventoryAppDependencies {
 
     readonly databaseReadinessProbe:
     ReadinessProbe;
+
+    readonly outboxDiagnosticsReader?:
+    OutboxDiagnosticsReader;
+
+    readonly logger?:
+    AppLogger;
 }
 
 export function createInventoryApp(
@@ -40,6 +54,11 @@ export function createInventoryApp(
     } = dependencies;
 
     const app = express();
+
+    // Do not advertise the framework version to clients.
+    app.disable(
+        "x-powered-by"
+    );
 
     app.get(
         "/health",
@@ -122,6 +141,62 @@ export function createInventoryApp(
             } catch (error) {
                 next(error);
             }
+        }
+    );
+
+    const {
+        outboxDiagnosticsReader
+    } = dependencies;
+
+    if (outboxDiagnosticsReader) {
+        // Operational view of the outbox backlog. Contains counts and
+        // timestamps only, never event payloads.
+        app.get(
+            "/diagnostics/outbox",
+            async (
+                _request: Request,
+                response: Response,
+                next: NextFunction
+            ) => {
+                try {
+                    response.json(
+                        await outboxDiagnosticsReader
+                            .getOutboxDiagnostics()
+                    );
+                } catch (error) {
+                    next(error);
+                }
+            }
+        );
+    }
+
+    app.use(
+        (
+            error: unknown,
+            request: Request,
+            response: Response,
+            // Express identifies error middleware by its arity.
+            _next: NextFunction
+        ) => {
+            dependencies.logger?.error(
+                "Request failed",
+                error,
+                {
+                    method:
+                        request.method,
+                    path:
+                        request.path
+                }
+            );
+
+            // Details stay in the server logs; clients get a stable,
+            // non-sensitive body.
+            response
+                .status(503)
+                .json({
+                    error:
+                        "The inventory data is temporarily unavailable."
+                });
         }
     );
 

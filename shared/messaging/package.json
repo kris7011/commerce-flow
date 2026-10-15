@@ -14,11 +14,14 @@
     "scripts": {
         "build": "tsc -p tsconfig.json",
         "typecheck": "tsc -p tests/tsconfig.json --noEmit",
-        "test": "node --import tsx --test tests/rabbitMqClient.test.ts tests/rabbitMqSupervisor.test.ts",
-        "test:integration": "node --import tsx --test tests/integration/rabbitMqClient.integration.test.ts"
+        "test": "node --import tsx --test tests/rabbitMqClient.test.ts tests/rabbitMqSupervisor.test.ts tests/confirmedPublisher.test.ts",
+        "test:integration": "node --import tsx --test tests/integration/*.integration.test.ts"
     },
     "dependencies": {
         "@commerce-flow/logging": "file:../logging",
         "amqplib": "^0.10.5"
+    },
+    "devDependencies": {
+        "@commerce-flow/testing": "file:../testing"
     }
 }

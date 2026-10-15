@@ -16,11 +16,6 @@ import {
     type DeliveryBookedPublisher
 } from "../src/inventoryReservedHandler.js";
 
-const fixedDate =
-    new Date(
-        "2026-08-05T13:00:00.000Z"
-    );
-
 test(
     "books delivery and publishes DeliveryBooked",
     async () => {
@@ -60,7 +55,7 @@ test(
                 eventType:
                     "DeliveryBooked",
                 occurredAt:
-                    "2026-08-05T13:00:00.000Z",
+                    "2026-08-05T12:59:00.000Z",
                 correlationId:
                     "correlation-001",
                 data: {
@@ -285,11 +280,7 @@ function createDeliveryService(
             currentIndex += 1;
 
             return generatedId;
-        },
-        getCurrentDate: () =>
-            new Date(
-                fixedDate.getTime()
-            )
+        }
     });
 }
 

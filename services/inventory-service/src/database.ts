@@ -1,26 +1,69 @@
 import {
-    Pool,
-    type PoolClient
+    Pool
 } from "pg";
+import type {
+    AppLogger
+} from "@commerce-flow/logging";
+import {
+    migrateInventoryDatabase,
+    type MigrationResult
+} from "./migrations.js";
 
-const DEFAULT_DATABASE_URL =
+/** Development-only default; production must set DATABASE_URL. */
+export const DEFAULT_DATABASE_URL =
     "postgresql://commerce_flow:" +
     "commerce_flow@" +
     "localhost:5432/" +
     "commerce_flow";
 
-const DATABASE_INITIALIZATION_LOCK_NAME =
-    "commerce-flow.inventory-database-bootstrap";
+export interface InventoryDatabasePoolOptions {
+    readonly connectionString?: string;
+    readonly logger?: AppLogger;
+    readonly maxConnections?: number;
+}
 
 export function createInventoryDatabasePool(
-    connectionString:
-        string =
-        process.env.DATABASE_URL ??
-        DEFAULT_DATABASE_URL
+    options:
+        InventoryDatabasePoolOptions = {}
 ): Pool {
-    return new Pool({
-        connectionString
-    });
+    const pool =
+        new Pool({
+            connectionString:
+                options.connectionString ??
+                process.env.DATABASE_URL ??
+                DEFAULT_DATABASE_URL,
+            application_name:
+                "inventory-service",
+            max:
+                options.maxConnections ??
+                10,
+            // Fail fast while PostgreSQL is unreachable instead of
+            // queueing requests indefinitely.
+            connectionTimeoutMillis:
+                5_000,
+            idleTimeoutMillis:
+                30_000,
+            statement_timeout:
+                15_000
+        });
+
+    // An idle client can fail (e.g. when PostgreSQL restarts).
+    // Without a listener that error would crash the process; the
+    // pool discards the client and reconnects on the next query.
+    pool.on(
+        "error",
+        error => {
+            options.logger?.warn(
+                "Idle PostgreSQL client failed",
+                {
+                    errorMessage:
+                        error.message
+                }
+            );
+        }
+    );
+
+    return pool;
 }
 
 export async function isInventoryDatabaseReady(
@@ -41,141 +84,70 @@ export async function isInventoryDatabaseReady(
     }
 }
 
+/**
+ * Applies pending schema migrations and seeds the demo catalogue.
+ * Safe to call concurrently from several processes.
+ */
 export async function initializeInventoryDatabase(
     pool: Pool
-): Promise<void> {
-    const client =
-        await pool.connect();
-
-    try {
-        await client.query(
-            "BEGIN"
+): Promise<MigrationResult> {
+    const result =
+        await migrateInventoryDatabase(
+            pool
         );
 
-        await acquireInventoryDatabaseInitializationLock(
-            client
-        );
-
-        await createInventoryStockTable(
-            client
-        );
-
-        await createInventoryOutboxTable(
-            client
-        );
-
-        await seedInitialInventoryStock(
-            client
-        );
-
-        await client.query(
-            "COMMIT"
-        );
-    } catch (error) {
-        try {
-            await client.query(
-                "ROLLBACK"
-            );
-        } catch {
-            // Preserve the original error.
-        }
-
-        throw error;
-    } finally {
-        client.release();
-    }
-}
-
-async function createInventoryStockTable(
-    client: PoolClient
-): Promise<void> {
-    await client.query(`
-        CREATE TABLE IF NOT EXISTS inventory_stock (
-            product_id TEXT PRIMARY KEY,
-            quantity INTEGER NOT NULL,
-            CONSTRAINT inventory_stock_quantity_nonnegative
-                CHECK (quantity >= 0)
-        )
-    `);
-}
-
-async function acquireInventoryDatabaseInitializationLock(
-    client: PoolClient
-): Promise<void> {
-    await client.query(
-        `
-            SELECT pg_advisory_xact_lock(
-                hashtext($1::text)::bigint
-            )
-        `,
-        [
-            DATABASE_INITIALIZATION_LOCK_NAME
-        ]
+    await seedDemoInventoryStock(
+        pool
     );
+
+    return result;
 }
 
-async function createInventoryOutboxTable(
-    client: PoolClient
+export const DEMO_INVENTORY_STOCK:
+    Readonly<Record<string, number>> = {
+        "washing-machine-01": 10,
+        "dishwasher-01": 5,
+        "dryer-01": 3
+    };
+
+/**
+ * Inserts the demo products if they do not exist yet. Existing
+ * quantities are never overwritten.
+ */
+export async function seedDemoInventoryStock(
+    pool: Pool,
+    stock:
+        Readonly<Record<string, number>> =
+        DEMO_INVENTORY_STOCK
 ): Promise<void> {
-    await client.query(`
-        CREATE TABLE IF NOT EXISTS inventory_outbox (
-            sequence_id BIGINT
-                GENERATED ALWAYS AS IDENTITY
-                PRIMARY KEY,
+    const entries =
+        Object.entries(
+            stock
+        );
 
-            event_id UUID NOT NULL,
-
-            event_type TEXT NOT NULL,
-
-            routing_key TEXT NOT NULL,
-
-            payload JSONB NOT NULL,
-
-            occurred_at TIMESTAMPTZ NOT NULL,
-
-            created_at TIMESTAMPTZ NOT NULL
-                DEFAULT NOW(),
-
-            published_at TIMESTAMPTZ,
-
-            CONSTRAINT inventory_outbox_event_id_unique
-                UNIQUE (event_id)
-        )
-    `);
-
-    await client.query(`
-        CREATE INDEX IF NOT EXISTS
-            inventory_outbox_pending_sequence_idx
-        ON inventory_outbox (
-            sequence_id
-        )
-        WHERE published_at IS NULL
-    `);
-}
-
-async function seedInitialInventoryStock(
-    client: PoolClient
-): Promise<void> {
-    await client.query(
+    await pool.query(
         `
             INSERT INTO inventory_stock (
                 product_id,
                 quantity
             )
-            VALUES
-                ($1, $2),
-                ($3, $4),
-                ($5, $6)
+            SELECT *
+            FROM UNNEST(
+                $1::text[],
+                $2::integer[]
+            )
             ON CONFLICT (product_id)
             DO NOTHING
         `,
         [
-            "washing-machine-01",
-            10,
-            "dishwasher-01",
-            5,
-            "dryer-01",
-            3
+            entries.map(
+                ([productId]) =>
+                    productId
+            ),
+            entries.map(
+                ([, quantity]) =>
+                    quantity
+            )
         ]
     );
 }

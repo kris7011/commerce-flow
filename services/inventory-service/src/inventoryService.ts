@@ -2,15 +2,18 @@ import { randomUUID } from "node:crypto";
 import type {
     InventoryReservationFailedEvent,
     InventoryReservedEvent,
+    OrderItem,
     PaymentAuthorizedEvent
 } from "@commerce-flow/contracts";
 import type {
-    InventoryRepository
-} from "./inventoryRepository.js";
+    InventoryResultEvent,
+    InventoryUnitOfWork,
+    ReservationRecord
+} from "./inventoryStore.js";
 
-export type InventoryResultEvent =
-    | InventoryReservedEvent
-    | InventoryReservationFailedEvent;
+export type {
+    InventoryResultEvent
+} from "./inventoryStore.js";
 
 type UnavailableItem =
     InventoryReservationFailedEvent[
@@ -18,6 +21,21 @@ type UnavailableItem =
     ][
     "unavailableItems"
     ][number];
+
+export type ReservationOutcome =
+    | {
+        /** The reservation decision was made and committed now. */
+        readonly status: "Processed";
+        readonly event: InventoryResultEvent;
+    }
+    | {
+        /**
+         * The order had already been processed (by this or another
+         * message). Nothing was changed; the original outcome stands.
+         */
+        readonly status: "Duplicate";
+        readonly existing: ReservationRecord;
+    };
 
 export interface InventoryServiceDependencies {
     generateId?: () => string;
@@ -35,8 +53,8 @@ export class InventoryService {
         () => string;
 
     constructor(
-        private readonly repository:
-            InventoryRepository,
+        private readonly unitOfWork:
+            InventoryUnitOfWork,
         dependencies:
             InventoryServiceDependencies = {}
     ) {
@@ -49,33 +67,120 @@ export class InventoryService {
             (() => new Date().toISOString());
     }
 
-    async processPaymentAuthorized(
-        event: PaymentAuthorizedEvent
-    ): Promise<InventoryResultEvent> {
-        const reservationResult =
-            await this.repository
-                .tryReserve(
-                    event.data.items
+    /**
+     * Reserves stock for a paid order exactly once per order id.
+     *
+     * The stock change (if any), the idempotency record and the
+     * resulting event are committed in one transaction. The event is
+     * published later by the outbox relay, so a broker outage can
+     * never leave a committed reservation without its event.
+     */
+    async reserveForPayment(
+        sourceEvent: PaymentAuthorizedEvent
+    ): Promise<ReservationOutcome> {
+        const {
+            orderId,
+            items
+        } = sourceEvent.data;
+
+        return await this.unitOfWork.inTransaction(
+            async transaction => {
+                const existing =
+                    await transaction.lockOrder(
+                        orderId
+                    );
+
+                if (existing) {
+                    return {
+                        status:
+                            "Duplicate",
+                        existing
+                    };
+                }
+
+                const requestedQuantities =
+                    aggregateQuantities(
+                        items
+                    );
+
+                const availableQuantities =
+                    await transaction.lockStock([
+                        ...requestedQuantities.keys()
+                    ]);
+
+                const unavailableItems =
+                    findUnavailableItems(
+                        requestedQuantities,
+                        availableQuantities
+                    );
+
+                if (
+                    unavailableItems.length >
+                    0
+                ) {
+                    const event =
+                        this.createReservationFailedEvent(
+                            sourceEvent,
+                            unavailableItems
+                        );
+
+                    await transaction.recordReservation({
+                        orderId,
+                        status:
+                            "Rejected",
+                        reservationId:
+                            null,
+                        sourceEventId:
+                            sourceEvent.eventId,
+                        resultEventId:
+                            event.eventId,
+                        items
+                    });
+
+                    await transaction.enqueueEvent(
+                        event
+                    );
+
+                    return {
+                        status:
+                            "Processed",
+                        event
+                    };
+                }
+
+                await transaction.decrementStock(
+                    requestedQuantities
                 );
 
-        if (
-            reservationResult.status ===
-            "InsufficientStock"
-        ) {
-            return this
-                .createReservationFailedEvent(
-                    event,
-                    [
-                        ...reservationResult
-                            .unavailableItems
-                    ]
-                );
-        }
+                const event =
+                    this.createInventoryReservedEvent(
+                        sourceEvent
+                    );
 
-        return this
-            .createInventoryReservedEvent(
-                event
-            );
+                await transaction.recordReservation({
+                    orderId,
+                    status:
+                        "Reserved",
+                    reservationId:
+                        event.data.reservationId,
+                    sourceEventId:
+                        sourceEvent.eventId,
+                    resultEventId:
+                        event.eventId,
+                    items
+                });
+
+                await transaction.enqueueEvent(
+                    event
+                );
+
+                return {
+                    status:
+                        "Processed",
+                    event
+                };
+            }
+        );
     }
 
     private createInventoryReservedEvent(
@@ -134,4 +239,60 @@ export class InventoryService {
             }
         };
     }
+}
+
+export function aggregateQuantities(
+    items: readonly OrderItem[]
+): Map<string, number> {
+    const quantityByProductId =
+        new Map<string, number>();
+
+    for (const item of items) {
+        quantityByProductId.set(
+            item.productId,
+            (
+                quantityByProductId
+                    .get(item.productId) ??
+                0
+            ) +
+            item.quantity
+        );
+    }
+
+    return quantityByProductId;
+}
+
+function findUnavailableItems(
+    requestedQuantities:
+        ReadonlyMap<string, number>,
+    availableQuantities:
+        ReadonlyMap<string, number>
+): UnavailableItem[] {
+    const unavailableItems:
+        UnavailableItem[] = [];
+
+    for (
+        const [
+            productId,
+            requestedQuantity
+        ] of requestedQuantities
+    ) {
+        const availableQuantity =
+            availableQuantities
+                .get(productId) ??
+            0;
+
+        if (
+            availableQuantity <
+            requestedQuantity
+        ) {
+            unavailableItems.push({
+                productId,
+                requestedQuantity,
+                availableQuantity
+            });
+        }
+    }
+
+    return unavailableItems;
 }

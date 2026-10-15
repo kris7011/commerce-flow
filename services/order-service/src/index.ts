@@ -1,10 +1,20 @@
 import {
+    COMMERCE_TOPOLOGY,
+    ROUTING_KEYS
+} from "@commerce-flow/contracts";
+import {
     createStructuredLogger
 } from "@commerce-flow/logging";
 import {
+    DEVELOPMENT_RABBITMQ_URL,
     RabbitMqClient,
     RabbitMqSupervisor
 } from "@commerce-flow/messaging";
+import {
+    readPort,
+    readUrl,
+    runService
+} from "@commerce-flow/runtime";
 import {
     createOrderApp,
     type OrderCreatedPublisher
@@ -13,28 +23,49 @@ import {
     OrderService
 } from "./orderService.js";
 
-const port =
-    Number(
-        process.env.ORDER_SERVICE_PORT ??
-        3001
-    );
-
-const rabbitMqUrl =
-    process.env.RABBITMQ_URL ??
-    "amqp://guest:guest@localhost:5672";
-
 const logger =
     createStructuredLogger(
         "order-service"
     );
 
-const rabbitMq =
-    new RabbitMqClient(
-        rabbitMqUrl
+const port =
+    readPort(
+        process.env,
+        "ORDER_SERVICE_PORT",
+        3001
     );
 
-const orderService =
-    new OrderService();
+const rabbitMqUrl =
+    readUrl(
+        process.env,
+        "RABBITMQ_URL",
+        DEVELOPMENT_RABBITMQ_URL,
+        [
+            "amqp:",
+            "amqps:"
+        ]
+    );
+
+const rabbitMq =
+    new RabbitMqClient(
+        rabbitMqUrl,
+        "commerce.events",
+        {
+            // Bounds how long an HTTP request waits for the broker
+            // before answering 503.
+            publishTimeoutInMs:
+                5_000,
+            topology:
+                COMMERCE_TOPOLOGY
+        },
+        {
+            logger:
+                logger.child({
+                    component:
+                        "messaging"
+                })
+        }
+    );
 
 const orderCreatedPublisher:
     OrderCreatedPublisher = {
@@ -42,14 +73,11 @@ const orderCreatedPublisher:
         event
     ): Promise<void> {
         await rabbitMq.publish(
-            "order.created",
+            ROUTING_KEYS.OrderCreated,
             event
         );
     }
 };
-
-const supervisorController =
-    new AbortController();
 
 const rabbitMqSupervisor =
     new RabbitMqSupervisor(
@@ -67,54 +95,30 @@ const rabbitMqSupervisor =
 
 const app =
     createOrderApp({
-        orderService,
+        orderService:
+            new OrderService(),
         orderCreatedPublisher,
         logger,
         readinessProbe:
             rabbitMqSupervisor
     });
 
-function start(): void {
-    app.listen(
-        port,
-        () => {
-            logger.info(
-                "Service listening",
-                {
-                    port
-                }
-            );
+await runService({
+    port,
+    requestListener:
+        app,
+    logger,
+    backgroundTasks: [
+        {
+            name:
+                "rabbitmq-supervisor",
+            run: signal =>
+                rabbitMqSupervisor.run(
+                    signal
+                )
         }
-    );
-
-    void rabbitMqSupervisor
-        .run(
-            supervisorController.signal
-        )
-        .catch(error => {
-            logger.error(
-                "RabbitMQ supervisor stopped unexpectedly",
-                error,
-                {
-                    port
-                }
-            );
-        });
-}
-
-start();
-
-process.on(
-    "SIGINT",
-    async () => {
-        logger.info(
-            "Service shutting down"
-        );
-
-        supervisorController.abort();
-
+    ],
+    async stop() {
         await rabbitMq.close();
-
-        process.exit(0);
     }
-);
+});

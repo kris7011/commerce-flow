@@ -1,23 +1,38 @@
+# Local development and CI infrastructure.
+#
+# DEVELOPMENT ONLY: the default credentials below are well known and
+# the ports are published on 127.0.0.1 only. Override them through
+# environment variables (see .env.example); never reuse them elsewhere.
+
 services:
   rabbitmq:
-    image: rabbitmq:3-management
+    image: rabbitmq:3.13-management
     container_name: commerce-flow-rabbitmq
 
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-guest}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-guest}
+
     ports:
-      - "5672:5672"
-      - "15672:15672"
+      - "127.0.0.1:5672:5672"
+      - "127.0.0.1:15672:15672"
+
+    # Give the broker time to close connections cleanly.
+    stop_grace_period: 30s
 
     healthcheck:
+      # "ping" succeeds before the AMQP listener accepts clients;
+      # checking the listeners avoids racing a booting broker.
       test:
         - CMD
         - rabbitmq-diagnostics
         - -q
-        - ping
+        - check_port_connectivity
 
       interval: 5s
-      timeout: 5s
-      retries: 12
-      start_period: 5s
+      timeout: 10s
+      retries: 24
+      start_period: 10s
 
   postgres:
     image: postgres:17-alpine
@@ -25,19 +40,21 @@ services:
 
     environment:
       POSTGRES_DB: commerce_flow
-      POSTGRES_USER: commerce_flow
-      POSTGRES_PASSWORD: commerce_flow
+      POSTGRES_USER: ${POSTGRES_USER:-commerce_flow}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-commerce_flow}
 
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
 
     volumes:
       - commerce-flow-postgres-data:/var/lib/postgresql/data
 
+    stop_grace_period: 30s
+
     healthcheck:
       test:
         - CMD-SHELL
-        - pg_isready -U commerce_flow -d commerce_flow
+        - pg_isready -U "$${POSTGRES_USER}" -d commerce_flow
 
       interval: 5s
       timeout: 5s

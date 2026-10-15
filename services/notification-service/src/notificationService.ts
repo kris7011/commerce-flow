@@ -1,12 +1,43 @@
 import { randomUUID } from "node:crypto";
-import type {
-    DeliveryBookedEvent,
-    InventoryReservationFailedEvent
+import {
+    parseDeliveryBookedEvent,
+    parseInventoryReservationFailedEvent,
+    type DeliveryBookedEvent,
+    type InventoryReservationFailedEvent
 } from "@commerce-flow/contracts";
 
 export type NotificationEvent =
     | DeliveryBookedEvent
     | InventoryReservationFailedEvent;
+
+export function parseNotificationEvent(
+    value: unknown
+): NotificationEvent {
+    const eventType =
+        typeof value === "object" &&
+        value !== null &&
+        "eventType" in value
+            ? value.eventType
+            : undefined;
+
+    switch (eventType) {
+        case "DeliveryBooked":
+            return parseDeliveryBookedEvent(
+                value
+            );
+
+        case "InventoryReservationFailed":
+            return parseInventoryReservationFailedEvent(
+                value
+            );
+
+        default:
+            throw new Error(
+                `Unsupported notification event type: ` +
+                `${String(eventType)}`
+            );
+    }
+}
 
 export interface CustomerNotification {
     readonly notificationId: string;
@@ -44,9 +75,43 @@ export class NotificationService {
             (() => new Date().toISOString());
     }
 
+    findNotification(
+        orderId: string,
+        type: CustomerNotification["type"]
+    ): CustomerNotification | undefined {
+        const existing =
+            this.notifications.find(notification => {
+                return (
+                    notification.orderId === orderId &&
+                    notification.type === type
+                );
+            });
+
+        return existing
+            ? {
+                ...existing
+            }
+            : undefined;
+    }
+
+    /**
+     * Idempotent per order and notification type: a customer is told
+     * about each outcome once, even if the event is delivered again
+     * (including re-emissions with a different event id).
+     */
     createNotification(
         event: NotificationEvent
     ): CustomerNotification {
+        const existing =
+            this.findNotification(
+                event.data.orderId,
+                event.eventType
+            );
+
+        if (existing) {
+            return existing;
+        }
+
         const notification =
             this.buildNotification(event);
 

@@ -546,6 +546,160 @@ test(
     }
 );
 
+test(
+    "returns 503 with Retry-After instead of crashing when publishing fails",
+    async () => {
+        const logger =
+            new RecordingOrderAppLogger();
+
+        const app =
+            createOrderApp({
+                orderService:
+                    createOrderService([
+                        "order-001",
+                        "event-001"
+                    ]),
+                orderCreatedPublisher: {
+                    publishOrderCreated:
+                        async () => {
+                            throw new Error(
+                                "RabbitMQ did not confirm event event-001"
+                            );
+                        }
+                },
+                logger,
+                readinessProbe:
+                    readyProbe
+            });
+
+        await withTestServer(
+            app,
+            async baseUrl => {
+                const response =
+                    await fetch(
+                        `${baseUrl}/orders`,
+                        {
+                            method: "POST",
+                            headers: {
+                                "content-type":
+                                    "application/json",
+                                "x-correlation-id":
+                                    "correlation-503"
+                            },
+                            body:
+                                JSON.stringify({
+                                    customerId:
+                                        "customer-001",
+                                    items: [
+                                        {
+                                            productId:
+                                                "dryer-01",
+                                            quantity: 1,
+                                            unitPrice: 2999
+                                        }
+                                    ]
+                                })
+                        }
+                    );
+
+                assert.equal(
+                    response.status,
+                    503
+                );
+
+                assert.equal(
+                    response.headers.get(
+                        "retry-after"
+                    ),
+                    "5"
+                );
+
+                assert.deepEqual(
+                    await response.json(),
+                    {
+                        error:
+                            "The order could not be accepted " +
+                            "because the message broker is " +
+                            "unavailable. Please retry later.",
+                        correlationId:
+                            "correlation-503"
+                    }
+                );
+
+                assert.equal(
+                    logger.errorLogs[0]?.message,
+                    "Could not publish OrderCreated; order not accepted"
+                );
+
+                assert.deepEqual(
+                    logger.infoLogs,
+                    []
+                );
+
+                // The service keeps serving requests afterwards.
+                const health =
+                    await fetch(
+                        `${baseUrl}/health`
+                    );
+
+                assert.equal(
+                    health.status,
+                    200
+                );
+            }
+        );
+    }
+);
+
+test(
+    "answers malformed JSON with a 400 JSON error",
+    async () => {
+        const app =
+            createOrderApp({
+                orderService:
+                    createOrderService([]),
+                orderCreatedPublisher:
+                    new RecordingOrderCreatedPublisher(),
+                logger:
+                    silentLogger,
+                readinessProbe:
+                    readyProbe
+            });
+
+        await withTestServer(
+            app,
+            async baseUrl => {
+                const response =
+                    await fetch(
+                        `${baseUrl}/orders`,
+                        {
+                            method: "POST",
+                            headers: {
+                                "content-type":
+                                    "application/json"
+                            },
+                            body:
+                                "{\"customerId\":"
+                        }
+                    );
+
+                assert.equal(
+                    response.status,
+                    400
+                );
+
+                assert.deepEqual(
+                    await response.json(),
+                    {
+                        error:
+                            "The request body is not valid JSON."
+                    }
+                );
+            }
+        );
+    }
+);
+
 class RecordingOrderAppLogger
     implements AppLogger {
     readonly infoLogs: {

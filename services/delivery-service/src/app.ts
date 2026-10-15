@@ -24,6 +24,11 @@ export function createDeliveryApp(
 
     const app = express();
 
+    // Do not advertise the framework version to clients.
+    app.disable(
+        "x-powered-by"
+    );
+
     app.get(
         "/health",
         (
