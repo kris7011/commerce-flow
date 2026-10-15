@@ -1,6 +1,7 @@
 import express from "express";
 import type {
     Express,
+    NextFunction,
     Request,
     Response
 } from "express";
@@ -152,10 +153,47 @@ export function createOrderApp(
                     )
                 );
 
-            await orderCreatedPublisher
-                .publishOrderCreated(
-                    result.event
+            try {
+                // Resolves only after the broker confirms the event.
+                await orderCreatedPublisher
+                    .publishOrderCreated(
+                        result.event
+                    );
+            } catch (error) {
+                // Nothing has been persisted, so the client can safely
+                // retry. (If the broker received the event but the
+                // confirm was lost, a retry creates a second order;
+                // see the README's known limitations.)
+                logger.error(
+                    "Could not publish OrderCreated; order not accepted",
+                    error,
+                    {
+                        orderId:
+                            result.response.orderId,
+                        eventId:
+                            result.event.eventId,
+                        correlationId:
+                            result.response
+                                .correlationId
+                    }
                 );
+
+                return response
+                    .status(503)
+                    .set(
+                        "Retry-After",
+                        "5"
+                    )
+                    .json({
+                        error:
+                            "The order could not be accepted " +
+                            "because the message broker is " +
+                            "unavailable. Please retry later.",
+                        correlationId:
+                            result.response
+                                .correlationId
+                    });
+            }
 
             logger.info(
                 "Created order",
@@ -181,9 +219,62 @@ export function createOrderApp(
 
             return response
                 .status(201)
+                .set(
+                    "x-correlation-id",
+                    result.response.correlationId
+                )
                 .json(result.response);
         }
     );
 
+    app.use(
+        (
+            error: unknown,
+            request: Request,
+            response: Response,
+            // Express identifies error middleware by its arity.
+            _next: NextFunction
+        ) => {
+            if (isMalformedJsonError(error)) {
+                return response
+                    .status(400)
+                    .json({
+                        error:
+                            "The request body is not valid JSON."
+                    });
+            }
+
+            logger.error(
+                "Request failed",
+                error,
+                {
+                    method:
+                        request.method,
+                    path:
+                        request.path
+                }
+            );
+
+            return response
+                .status(500)
+                .json({
+                    error:
+                        "Internal server error."
+                });
+        }
+    );
+
     return app;
+}
+function isMalformedJsonError(
+    error: unknown
+): boolean {
+    return (
+        typeof error === "object" &&
+        error !== null &&
+        Reflect.get(
+            error,
+            "type"
+        ) === "entity.parse.failed"
+    );
 }

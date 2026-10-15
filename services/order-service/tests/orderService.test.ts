@@ -157,6 +157,49 @@ test(
 );
 
 test(
+    "replaces unsafe or oversized correlation ids",
+    () => {
+        for (
+            const unsafeCorrelationId of [
+                "abc\n{\"level\":\"error\"}",
+                "<script>alert(1)</script>",
+                "x".repeat(129)
+            ]
+        ) {
+            const service =
+                createOrderService([
+                    "generated-correlation-id",
+                    "order-001",
+                    "event-001"
+                ]);
+
+            const result =
+                service.createOrder(
+                    {
+                        customerId:
+                            "customer-001",
+                        items: [
+                            {
+                                productId:
+                                    "dryer-01",
+                                quantity: 1,
+                                unitPrice: 2999
+                            }
+                        ]
+                    },
+                    unsafeCorrelationId
+                );
+
+            assert.equal(
+                result.response
+                    .correlationId,
+                "generated-correlation-id"
+            );
+        }
+    }
+);
+
+test(
     "rounds the total amount to two decimal places",
     () => {
         const service =

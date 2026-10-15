@@ -21,6 +21,9 @@ export interface CreateOrderResult {
     response: CreatedOrderResponse;
 }
 
+const CORRELATION_ID_PATTERN =
+    /^[A-Za-z0-9._:-]{1,128}$/;
+
 export interface OrderServiceDependencies {
     generateId?: () => string;
     getCurrentTime?: () => string;
@@ -77,13 +80,23 @@ export class OrderService {
         };
     }
 
+    /**
+     * Accepts a caller-supplied correlation id only if it is short and
+     * uses a safe character set; anything else (including attempts to
+     * inject newlines or markup into logs) is replaced by a new id.
+     */
     private resolveCorrelationId(
         suppliedCorrelationId?: string
     ): string {
         const normalizedCorrelationId =
             suppliedCorrelationId?.trim();
 
-        if (normalizedCorrelationId) {
+        if (
+            normalizedCorrelationId &&
+            CORRELATION_ID_PATTERN.test(
+                normalizedCorrelationId
+            )
+        ) {
             return normalizedCorrelationId;
         }
 
