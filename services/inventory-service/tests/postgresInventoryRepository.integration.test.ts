@@ -1,15 +1,21 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-    createInventoryDatabasePool,
+    assertConnectedToTestDatabase,
+    createTestDatabase
+} from "@commerce-flow/testing";
+import {
     initializeInventoryDatabase
 } from "../src/database.js";
 import {
     PostgresInventoryRepository
 } from "../src/postgresInventoryRepository.js";
 
+const testDatabase =
+    await createTestDatabase();
+
 const pool =
-    createInventoryDatabasePool();
+    testDatabase.createPool();
 
 const repository =
     new PostgresInventoryRepository(
@@ -32,9 +38,7 @@ test.beforeEach(
 
 test.after(
     async () => {
-        await resetStock();
-
-        await pool.end();
+        await testDatabase.drop();
     }
 );
 
@@ -269,6 +273,10 @@ test(
 
 async function resetStock():
     Promise<void> {
+    await assertConnectedToTestDatabase(
+        pool
+    );
+
     await pool.query(
         "TRUNCATE inventory_stock"
     );
