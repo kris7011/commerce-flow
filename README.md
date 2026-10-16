@@ -6,6 +6,9 @@
 
 **Node.js · TypeScript · RabbitMQ · PostgreSQL · Express · Zod · Docker · npm workspaces**
 
+[![CI](https://github.com/kris7011/commerce-flow/actions/workflows/ci.yml/badge.svg)](https://github.com/kris7011/commerce-flow/actions/workflows/ci.yml) · [Release notes](docs/releases/v1.0.0.md) · [Changelog](CHANGELOG.md)
+
+[Quick start](#getting-started) ·
 [Overview](#overview) ·
 [Architecture](#architecture) ·
 [Reliability](#reliability-and-delivery-guarantees) ·
