@@ -124,6 +124,10 @@ jobs:
             - name: Run the outage-recovery demo (dead-letter replay)
               run: npm run demo:recovery
 
+            # INTEGRATION BRANCH ONLY (not part of any PR).
+            - name: "Integration: Order API limits against the containers"
+              run: bash scripts-integration-limits.sh
+
             - name: Show system status
               run: npm run status
 
