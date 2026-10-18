@@ -48,6 +48,61 @@ Stock is persistent. Every run uses one unit, and the demo always picks the prod
 
 > While the demo's queue is bound to `#`, every routing key has a queue, so the services' mandatory publishing cannot detect a missing binding during that time. The tap is therefore a developer tool and not part of the services.
 
+### Example output
+
+This excerpt comes from CI run [39109750417](https://github.com/kris7011/commerce-flow/actions/runs/39109750417) (job *Full-stack demo (containers)*). It shows steps 2 and 4: the second `PaymentAuthorized`, at +146 ms, is the injected duplicate, and no second `InventoryReserved` follows it.
+
+```text
+== 2. A successful order =============================================
+  POST /orders  x-correlation-id: demo-ci-39109750417-1-success  ->  HTTP 201  orderId e4dc940d-43da-4002-930e-02828e215074
+  PASS  Order Service answers 201 Created
+  Events on commerce.events (outcome: Delivered):
+    +   12 ms  order-service        OrderCreated                order.created
+    +   19 ms  payment-service      PaymentAuthorized           payment.authorized
+    +   69 ms  inventory-service    InventoryReserved           inventory.reserved
+    +   75 ms  delivery-service     DeliveryBooked              delivery.booked
+  PASS  the order passes all five services and ends with DeliveryBooked
+  Notification: "Delivery has been booked with DefaultCarrier. Estimated delivery date: 2026-10-21."
+  PASS  Notification Service created a DeliveryBooked notification
+  Stock of washing-machine-01: 10 -> 9
+  PASS  stock of washing-machine-01 decreased by exactly 1
+
+== 4. A duplicate PaymentAuthorized with a new event id ==============
+  Published PaymentAuthorized a4127038-1b54-46c3-a7d6-2c7a8fe4d2cb for order e4dc940d-43da-4002-930e-02828e215074 again
+  Events on commerce.events (outcome: Delivered):
+    +   12 ms  order-service        OrderCreated                order.created
+    +   19 ms  payment-service      PaymentAuthorized           payment.authorized
+    +   69 ms  inventory-service    InventoryReserved           inventory.reserved
+    +   75 ms  delivery-service     DeliveryBooked              delivery.booked
+    +  146 ms  payment-service      PaymentAuthorized           payment.authorized
+  PASS  Inventory ignores the duplicate: still exactly one InventoryReserved
+  PASS  stock is unchanged by the duplicate
+
+  [steps 3, 5 and 6 omitted]
+
+== Result ============================================================
+  All 15 checks passed.
+```
+
+The same run's `trace` step, for the successful order, shows the services' log lines in time order. The last two lines are Inventory receiving and ignoring the duplicate:
+
+```text
+08:01:07.510  order-service        info  Published event  routingKey=order.created eventId=b425b30b-a8fc-4cc7-b3f0-6bfa6d7847cb eventType=OrderCreated
+08:01:07.510  order-service        info  Created order  orderId=e4dc940d-43da-4002-930e-02828e215074 eventId=b425b30b-a8fc-4cc7-b3f0-6bfa6d7847cb customerId=demo-customer-1 totalAmount=4999 itemCount=1
+08:01:07.511  payment-service      info  Received OrderCreated  eventId=b425b30b-a8fc-4cc7-b3f0-6bfa6d7847cb orderId=e4dc940d-43da-4002-930e-02828e215074 totalAmount=4999 itemCount=1
+08:01:07.515  payment-service      info  Published event  routingKey=payment.authorized eventId=71b82360-2700-5e82-ba1d-e0575083fd34 eventType=PaymentAuthorized
+08:01:07.515  payment-service      info  Authorized payment  eventId=71b82360-2700-5e82-ba1d-e0575083fd34 orderId=e4dc940d-43da-4002-930e-02828e215074 paymentId=6176b0e8-6986-5e9d-8092-6acc822f3756 amount=4999
+08:01:07.517  inventory-service    info  Received PaymentAuthorized  eventId=71b82360-2700-5e82-ba1d-e0575083fd34 orderId=e4dc940d-43da-4002-930e-02828e215074 paymentId=6176b0e8-6986-5e9d-8092-6acc822f3756 amount=4999 itemCount=1
+08:01:07.522  inventory-service    info  Reserved inventory  eventId=3a111cd0-4602-482f-ba96-7827e0a14c5a orderId=e4dc940d-43da-4002-930e-02828e215074 reservationId=419b4bfb-6caf-47b2-9a12-c054553b1843 itemCount=1
+08:01:07.565  inventory-service    info  Published event  routingKey=inventory.reserved eventId=3a111cd0-4602-482f-ba96-7827e0a14c5a eventType=InventoryReserved
+08:01:07.568  delivery-service     info  Received InventoryReserved  eventId=3a111cd0-4602-482f-ba96-7827e0a14c5a orderId=e4dc940d-43da-4002-930e-02828e215074 reservationId=419b4bfb-6caf-47b2-9a12-c054553b1843 itemCount=1
+08:01:07.573  delivery-service     info  Published event  routingKey=delivery.booked eventId=5c686714-ce21-5329-b9a5-17d822feca16 eventType=DeliveryBooked
+08:01:07.573  delivery-service     info  Booked delivery  eventId=5c686714-ce21-5329-b9a5-17d822feca16 orderId=e4dc940d-43da-4002-930e-02828e215074 deliveryId=54fe2328-c52c-546e-8c89-113ace041517 carrier=DefaultCarrier estimatedDeliveryDate=2026-10-21
+08:01:07.576  notification-service info  Created customer notification  eventId=5c686714-ce21-5329-b9a5-17d822feca16 notificationId=25c18521-90fd-4e61-a07b-2d071ce99d64 notificationType=DeliveryBooked orderId=e4dc940d-43da-4002-930e-02828e215074 deliveryId=54fe2328-c52c-546e-8c89-113ace041517 carrier=DefaultCarrier estimatedDeliveryDate=2026-10-21
+08:01:07.641  inventory-service    info  Received PaymentAuthorized  eventId=a4127038-1b54-46c3-a7d6-2c7a8fe4d2cb orderId=e4dc940d-43da-4002-930e-02828e215074 paymentId=6176b0e8-6986-5e9d-8092-6acc822f3756 amount=4999 itemCount=1
+08:01:07.642  inventory-service    warn  Ignored duplicate PaymentAuthorized for an already processed order  eventId=a4127038-1b54-46c3-a7d6-2c7a8fe4d2cb orderId=e4dc940d-43da-4002-930e-02828e215074 originalSourceEventId=71b82360-2700-5e82-ba1d-e0575083fd34 originalStatus=Reserved originalResultEventId=3a111cd0-4602-482f-ba96-7827e0a14c5a
+```
+
 ## `npm run status`: the system on one screen
 
 ```bash
