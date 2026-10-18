@@ -121,6 +121,9 @@ jobs:
             - name: Run the order-flow demo
               run: npm run demo
 
+            - name: Run the outage-recovery demo (dead-letter replay)
+              run: npm run demo:recovery
+
             - name: Show system status
               run: npm run status
 

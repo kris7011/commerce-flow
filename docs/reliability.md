@@ -115,5 +115,5 @@ Every path converges on a consumer that recognises the duplicate. The exception 
 
 * **Exactly-once delivery.** It would require distributed transactions between RabbitMQ and PostgreSQL. Idempotent consumers achieve the business goal more simply.
 * **Broker-side delayed retries** (TTL and dead-letter retry queues). In-process backoff is sufficient here; a crash during the backoff just leads to redelivery.
-* **Automatic replay of dead-lettered messages.** They wait in `<queue>.dead-letter` for inspection.
+* **Automatic replay of dead-lettered messages.** They wait in `<queue>.dead-letter` for inspection. Once the cause is fixed, an operator replays them with `npm run dlq -- replay <queue>`. The tool publishes each message straight back to its original queue through the default exchange and acknowledges the dead letter only after the broker confirms; at most the messages present at the start are replayed. `npm run demo:recovery` shows the full cycle against a real PostgreSQL outage (see [demo.md](demo.md#npm-run-demorecovery-outage-dead-letter-and-replay)).
 * **Outbox pruning, metrics and tracing.** See the README's limitations.

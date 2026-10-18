@@ -263,6 +263,7 @@ npm ci
 npm run stack:up   # RabbitMQ, PostgreSQL and all five services as containers
 npm run demo       # orders, a duplicate event and an invalid request, with checks
 npm run status     # readiness, stock, outbox, queue and dead-letter depths
+npm run demo:recovery  # PostgreSQL outage → dead letter → replay → order completes
 ```
 
 The demo prints the events of each order as they cross the exchange, and checks the results: stock, notifications, outbox and dead-letter queues. It exits non-zero if anything is wrong, and CI runs it against the containers on every push. [docs/demo.md](docs/demo.md) explains each step, and `npm run trace` follows one order through the logs of all services.
@@ -426,9 +427,9 @@ A second job, **Full-stack demo (containers)**, builds the service image, starts
 * **Order Service has no persistence or idempotency key.** If the broker accepts `OrderCreated` but the confirm is lost (timeout), the client gets `503` and a retry creates a second order. The fix is order persistence plus an `Idempotency-Key` header and an outbox.
 * **Payment and delivery are simulated.** Payment always succeeds and nothing is compensated: a failed reservation does not refund the payment (no saga).
 * **Notifications are in memory** and are lost on restart.
-* **Handler retries live in memory.** A crash during a retry delay leads to redelivery (safe, but the retry counter restarts). Dead-lettered messages must be replayed manually.
+* **Handler retries live in memory.** A crash during a retry delay leads to redelivery (safe, but the retry counter restarts). Dead-lettered messages are replayed by an operator with `npm run dlq -- replay <queue>`, not automatically.
 * **Ordering.** Events are published roughly in outbox order, but concurrent relays and retries can reorder them. This is harmless here because each order produces one inventory event.
-* **Unroutable events from Payment and Delivery.** If a binding were missing despite the provisioned topology, their publish fails and the input message is retried and then dead-lettered (not lost, but it needs a manual replay). Inventory's outbox keeps retrying instead.
+* **Unroutable events from Payment and Delivery.** If a binding were missing despite the provisioned topology, their publish fails and the input message is retried and then dead-lettered (not lost, but it needs a replay with `npm run dlq`). Inventory's outbox keeps retrying instead.
 * **Outbox retention.** Published rows are kept indefinitely. Production would prune them.
 * **Observability** is limited to structured logs, readiness, the outbox diagnostics endpoint and the developer tools (`demo`, `status`, `trace`). There are no metrics backend or distributed traces (OpenTelemetry would be the next step).
 * **The containers are for local use and CI.** The Compose `app` profile runs one image per service on a single host. There is no orchestrator manifest, image registry or TLS configuration.
