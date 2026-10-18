@@ -82,6 +82,35 @@ test(
 );
 
 test(
+    "does not double the period after a reason that ends with one",
+    () => {
+        const service =
+            createNotificationService([
+                "notification-001"
+            ]);
+
+        const sourceEvent =
+            createInventoryReservationFailedEvent();
+
+        const result =
+            service.createNotification({
+                ...sourceEvent,
+                data: {
+                    ...sourceEvent.data,
+                    reason:
+                        "One or more products are not available " +
+                        "in the requested quantity."
+                }
+            });
+
+        assert.match(
+            result.message,
+            /in the requested quantity\. Unavailable items:/
+        );
+    }
+);
+
+test(
     "stores notifications in creation order",
     () => {
         const service =

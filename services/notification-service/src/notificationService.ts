@@ -187,7 +187,8 @@ export class NotificationService {
             type: "InventoryReservationFailed",
             message:
                 `Inventory reservation failed. ` +
-                `Reason: ${event.data.reason}. ` +
+                // The reason is free text and may end with a period.
+                `Reason: ${event.data.reason.replace(/[.\s]+$/, "")}. ` +
                 `Unavailable items: ` +
                 `${unavailableProducts}.`,
             correlationId: event.correlationId,
