@@ -9,7 +9,7 @@
         "db:init": "tsx src/initializeDatabase.ts",
         "build": "tsc -p tsconfig.json",
         "typecheck": "tsc -p tests/tsconfig.json --noEmit",
-        "test": "node --import tsx --test tests/inventoryService.test.ts tests/inventoryApp.test.ts tests/paymentAuthorizedHandler.test.ts tests/outboxRelay.test.ts tests/config.test.ts",
+        "test": "node --import tsx --test tests/inventoryService.test.ts tests/inventoryApp.test.ts tests/paymentAuthorizedHandler.test.ts tests/outboxRelay.test.ts tests/config.test.ts tests/databaseReadiness.test.ts",
         "test:integration": "node --import tsx --test tests/*.integration.test.ts"
     },
     "dependencies": {

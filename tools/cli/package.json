@@ -3,13 +3,19 @@
     "version": "0.1.0",
     "private": true,
     "type": "module",
-    "description": "Developer tools: the order-flow demo, a system status view and a log trace by correlation id.",
+    "description": "Developer tools: the order-flow demos, a system status view, dead-letter inspection and replay, and a log trace by correlation id.",
     "scripts": {
         "typecheck": "tsc -p tests/tsconfig.json --noEmit",
-        "test": "node --import tsx --test tests/endpoints.test.ts tests/timeline.test.ts tests/logTrace.test.ts"
+        "test": "node --import tsx --test tests/endpoints.test.ts tests/timeline.test.ts tests/logTrace.test.ts tests/deadLetters.test.ts",
+        "test:integration": "node --import tsx --test tests/deadLetters.integration.test.ts"
     },
     "dependencies": {
         "@commerce-flow/contracts": "file:../../shared/contracts",
         "amqplib": "^0.10.5"
+    },
+    "devDependencies": {
+        "@commerce-flow/logging": "file:../../shared/logging",
+        "@commerce-flow/messaging": "file:../../shared/messaging",
+        "@commerce-flow/testing": "file:../../shared/testing"
     }
 }

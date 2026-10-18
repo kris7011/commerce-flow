@@ -103,6 +103,43 @@ The same run's `trace` step, for the successful order, shows the services' log l
 08:01:07.642  inventory-service    warn  Ignored duplicate PaymentAuthorized for an already processed order  eventId=a4127038-1b54-46c3-a7d6-2c7a8fe4d2cb orderId=e4dc940d-43da-4002-930e-02828e215074 originalSourceEventId=71b82360-2700-5e82-ba1d-e0575083fd34 originalStatus=Reserved originalResultEventId=3a111cd0-4602-482f-ba96-7827e0a14c5a
 ```
 
+## `npm run demo:recovery`: outage, dead letter and replay
+
+```bash
+npm run demo:recovery
+```
+
+This scenario needs the containerised stack, because it stops and starts the `postgres` container with `docker compose`. It shows what happens when a dependency is down for longer than the in-process retries last, and how the system is brought back:
+
+| Step | What happens | What it checks |
+|---|---|---|
+| 1. Readiness | As in `npm run demo` | All services are ready, and `inventory-service.payment-authorized.dead-letter` is empty |
+| 2. Outage | `docker compose stop postgres`, then an order | Inventory reports `database: NotReady`. Order still answers `201`, because it needs no database. Inventory retries the `PaymentAuthorized` message (5 attempts with backoff) and then dead-letters it. No `InventoryReserved` is published |
+| 3. Recovery | `docker compose start postgres` | Inventory reports `database: Ready` again without a restart |
+| 4. Replay | `replayDeadLetters` for Inventory's queue | Exactly one message is replayed. The order completes with `DeliveryBooked`, the customer is notified, stock drops by exactly 1 and the dead-letter queue is empty |
+
+If the script fails half-way, it still starts PostgreSQL again. CI runs this scenario after `npm run demo`.
+
+## `npm run dlq`: inspect and replay dead letters
+
+```bash
+npm run dlq                                   # every dead-letter queue, with samples
+npm run dlq -- list inventory-service.payment-authorized
+npm run dlq -- replay inventory-service.payment-authorized [--limit 10]
+```
+
+Listing fetches messages unacknowledged and closes the channel, so the broker puts them back in their original order. For each message it shows the event type, event id, order id, correlation id, and RabbitMQ's `x-death` record (reason, queue, time and count).
+
+Replaying is deliberately conservative:
+
+* Only consumer queues of the topology (or their `.dead-letter` names) are accepted.
+* Each message is published through the default exchange **directly to the queue it came from**. Other queues bound to the same routing key therefore never receive a second copy.
+* Publishing is mandatory and confirmed. The dead letter is acknowledged only after the broker has confirmed the publication. A crash in between leaves a copy in both queues, which the idempotent consumers absorb (at-least-once).
+* At most the number of messages present at the start is replayed. A message that fails again returns to the dead-letter queue and does not cause an endless loop.
+* `x-death` is dropped, `x-commerce-flow-replayed-from` is set and `x-commerce-flow-replay-count` is incremented, so a message that is replayed repeatedly is easy to spot.
+
+`tools/cli/tests/deadLetters.integration.test.ts` checks these properties against a real broker, in its own virtual host with the production topology.
+
 ## `npm run status`: the system on one screen
 
 ```bash
@@ -127,7 +164,7 @@ The id can be a correlation id or an order id. Lines that carry only an id belon
 |---|---|
 | `ORDER_SERVICE_URL` … `NOTIFICATION_SERVICE_URL` | `http://127.0.0.1:3001` … `:3005` |
 | `RABBITMQ_URL` | `amqp://guest:guest@127.0.0.1:5672` |
-| `DEMO_RUN_ID` | the current UTC time, e.g. `20261018101500` |
+| `DEMO_RUN_ID` | the current UTC time, e.g. `20261018101500` (also used by `demo:recovery`, whose correlation id is `recovery-<run>`) |
 | `DEMO_READY_TIMEOUT_MS` / `DEMO_FLOW_TIMEOUT_MS` | `60000` / `30000` |
 
 ## Stop
