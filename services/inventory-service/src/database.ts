@@ -66,21 +66,54 @@ export function createInventoryDatabasePool(
     return pool;
 }
 
+/**
+ * Upper bound for the readiness query. While PostgreSQL is unreachable
+ * a query waits for the pool's connection timeout (5 s); a readiness
+ * probe must answer well within typical probe timeouts (about 1 s)
+ * instead.
+ */
+export const DATABASE_READINESS_TIMEOUT_IN_MS =
+    1_000;
+
 export async function isInventoryDatabaseReady(
-    pool: Pool
+    pool: Pick<Pool, "query">,
+    timeoutInMs =
+        DATABASE_READINESS_TIMEOUT_IN_MS
 ): Promise<boolean> {
-    try {
-        await pool.query(
+    let timer:
+        NodeJS.Timeout | undefined;
+
+    const timedOut =
+        new Promise<false>(resolve => {
+            timer =
+                setTimeout(
+                    () => resolve(false),
+                    timeoutInMs
+                );
+        });
+
+    // A query that outlives the timeout still finishes in the
+    // background (bounded by the pool's own timeouts); its result is
+    // ignored.
+    const query =
+        pool.query(
             `
                 SELECT 1
                 FROM inventory_stock
                 LIMIT 1
             `
+        ).then(
+            () => true,
+            () => false
         );
 
-        return true;
-    } catch {
-        return false;
+    try {
+        return await Promise.race([
+            query,
+            timedOut
+        ]);
+    } finally {
+        clearTimeout(timer);
     }
 }
 

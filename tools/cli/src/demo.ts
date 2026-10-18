@@ -5,26 +5,32 @@ import {
     ROUTING_KEYS
 } from "@commerce-flow/contracts";
 import {
-    resolveEndpoints
-} from "./endpoints.js";
+    FLOW_TIMEOUT_IN_MS,
+    SETTLE_TIME_IN_MS,
+    check,
+    endpoints,
+    eventsOf,
+    heading,
+    poll,
+    printTimeline,
+    reportResult,
+    runId,
+    sleep,
+    submitOrder,
+    waitForNotification,
+    waitForReadiness,
+    type PlacedOrder
+} from "./demoSupport.js";
 import {
     EventTap
 } from "./eventTap.js";
 import {
     countDeadLetters,
-    readNotifications,
     readOutboxDiagnostics,
     readQueueDepths,
-    readReadiness,
     readStock,
-    requestJson,
     type QueueDepth
 } from "./systemProbe.js";
-import {
-    buildOrderTimeline,
-    formatTimeline,
-    type ObservedMessage
-} from "./timeline.js";
 
 /*
  * Reproducible walk-through of the order workflow against a running
@@ -36,225 +42,9 @@ import {
  * fails, so CI can run it as a full-stack smoke test.
  */
 
-const endpoints =
-    resolveEndpoints(
-        process.env
-    );
-
-const READY_TIMEOUT_IN_MS =
-    Number(process.env.DEMO_READY_TIMEOUT_MS ?? 60_000);
-
-const FLOW_TIMEOUT_IN_MS =
-    Number(process.env.DEMO_FLOW_TIMEOUT_MS ?? 30_000);
-
-/** How long the demo waits to show that a duplicate changed nothing. */
-const SETTLE_TIME_IN_MS =
-    2_000;
-
-/**
- * Part of every correlation id the demo sends, so its orders can be
- * found in the logs afterwards. DEMO_RUN_ID fixes it (used by CI).
- */
-const runId =
-    process.env.DEMO_RUN_ID?.trim() ||
-    new Date()
-        .toISOString()
-        .replace(/[-:.TZ]/g, "")
-        .slice(0, 14);
-
-// Order Service replaces correlation ids outside this pattern.
-if (!/^[A-Za-z0-9._:-]{1,64}$/.test(runId)) {
-    throw new Error(
-        "DEMO_RUN_ID may only contain letters, digits and . _ : - " +
-        "(at most 64 characters)."
-    );
-}
-
-interface Check {
-    readonly description: string;
-    readonly passed: boolean;
-}
-
-const checks: Check[] = [];
-
-function check(
-    description: string,
-    passed: boolean
-): boolean {
-    checks.push({
-        description,
-        passed
-    });
-
-    console.log(
-        `  ${passed ? "PASS" : "FAIL"}  ${description}`
-    );
-
-    return passed;
-}
-
-function heading(
-    title: string
-): void {
-    console.log(
-        `\n== ${title} ${"=".repeat(Math.max(0, 66 - title.length))}`
-    );
-}
-
-async function poll<T>(
-    read: () => Promise<T>,
-    done: (value: T) => boolean,
-    timeoutInMs: number,
-    intervalInMs = 500
-): Promise<T> {
-    const deadline =
-        Date.now() + timeoutInMs;
-
-    for (;;) {
-        const value =
-            await read();
-
-        if (
-            done(value) ||
-            Date.now() >= deadline
-        ) {
-            return value;
-        }
-
-        await new Promise(resolve =>
-            setTimeout(resolve, intervalInMs)
-        );
-    }
-}
-
-async function waitForReadiness(): Promise<boolean> {
-    heading("1. System readiness");
-
-    const readiness =
-        await poll(
-            () => readReadiness(endpoints),
-            services => services.every(service => service.ready),
-            READY_TIMEOUT_IN_MS,
-            1_000
-        );
-
-    for (const service of readiness) {
-        console.log(
-            `  ${service.ready ? "ready    " : "NOT READY"}  ` +
-            `${service.service.padEnd(22)}${service.detail}`
-        );
-    }
-
-    return check(
-        "all five services report /ready",
-        readiness.every(service => service.ready)
-    );
-}
-
-interface SubmittedOrder {
-    readonly status: number;
-    readonly orderId: string | undefined;
-    readonly submittedAt: number;
-}
-
-async function submitOrder(
-    correlationId: string,
-    body: unknown
-): Promise<SubmittedOrder> {
-    const submittedAt =
-        Date.now();
-
-    const response =
-        await requestJson(
-            `${endpoints.services["order-service"]}/orders`,
-            {
-                method: "POST",
-                headers: {
-                    "content-type": "application/json",
-                    "x-correlation-id": correlationId
-                },
-                body: JSON.stringify(body)
-            }
-        );
-
-    const orderId =
-        typeof response.body === "object" &&
-        response.body !== null &&
-        "orderId" in response.body &&
-        typeof response.body.orderId === "string"
-            ? response.body.orderId
-            : undefined;
-
-    console.log(
-        `  POST /orders  x-correlation-id: ${correlationId}` +
-        `  ->  HTTP ${response.status}` +
-        (orderId ? `  orderId ${orderId}` : "")
-    );
-
-    return {
-        status: response.status,
-        orderId,
-        submittedAt
-    };
-}
-
-function eventsOf(
-    messages: readonly ObservedMessage[],
-    orderId: string,
-    eventType: string
-): ObservedMessage[] {
-    return messages.filter(
-        message =>
-            message.envelope.orderId === orderId &&
-            message.envelope.eventType === eventType
-    );
-}
-
-async function waitForNotification(
-    orderId: string,
-    type: string
-): Promise<string | undefined> {
-    const notifications =
-        await poll(
-            () => readNotifications(endpoints),
-            list => list.some(
-                notification =>
-                    notification.orderId === orderId &&
-                    notification.type === type
-            ),
-            10_000
-        );
-
-    return notifications.find(
-        notification =>
-            notification.orderId === orderId &&
-            notification.type === type
-    )?.message;
-}
-
-function printTimeline(
-    tap: EventTap,
-    order: SubmittedOrder & { orderId: string }
-): void {
-    const timeline =
-        buildOrderTimeline(
-            order.orderId,
-            tap.messages,
-            order.submittedAt
-        );
-
-    console.log(
-        `  Events on commerce.events (outcome: ${timeline.outcome}):`
-    );
-
-    for (const line of formatTimeline(timeline)) {
-        console.log(line);
-    }
-}
-
 async function successfulOrder(
     tap: EventTap
-): Promise<(SubmittedOrder & { orderId: string }) | undefined> {
+): Promise<PlacedOrder | undefined> {
     heading("2. A successful order");
 
     const stockBefore =
@@ -435,7 +225,7 @@ async function unavailableOrder(
 
 async function duplicateEvent(
     tap: EventTap,
-    order: SubmittedOrder & { orderId: string }
+    order: PlacedOrder
 ): Promise<void> {
     heading("4. A duplicate PaymentAuthorized with a new event id");
 
@@ -500,9 +290,7 @@ async function duplicateEvent(
         FLOW_TIMEOUT_IN_MS
     );
 
-    await new Promise(resolve =>
-        setTimeout(resolve, SETTLE_TIME_IN_MS)
-    );
+    await sleep(SETTLE_TIME_IN_MS);
 
     printTimeline(tap, order);
 
@@ -551,9 +339,7 @@ async function invalidOrder(
         order.status === 400
     );
 
-    await new Promise(resolve =>
-        setTimeout(resolve, SETTLE_TIME_IN_MS)
-    );
+    await sleep(SETTLE_TIME_IN_MS);
 
     check(
         "no event is published for the rejected request",
@@ -617,7 +403,7 @@ async function main(): Promise<number> {
         `Order Service: ${endpoints.services["order-service"]}`
     );
 
-    if (!await waitForReadiness()) {
+    if (!await waitForReadiness("1. System readiness")) {
         console.log(
             "\nStart the system first, for example:\n" +
             "  docker compose --profile app up -d --build --wait"
@@ -652,19 +438,8 @@ async function main(): Promise<number> {
         await tap.close();
     }
 
-    const failed =
-        checks.filter(entry => !entry.passed);
-
-    heading("Result");
-
-    console.log(
-        failed.length === 0
-            ? `  All ${checks.length} checks passed.`
-            : `  ${failed.length} of ${checks.length} checks failed:\n` +
-            failed
-                .map(entry => `    - ${entry.description}`)
-                .join("\n")
-    );
+    const exitCode =
+        reportResult();
 
     console.log(
         `\n  Follow one order through all service logs with:\n` +
@@ -672,9 +447,7 @@ async function main(): Promise<number> {
         `npm run --silent trace -- demo-${runId}-success`
     );
 
-    return failed.length === 0
-        ? 0
-        : 1;
+    return exitCode;
 }
 
 process.exitCode =
