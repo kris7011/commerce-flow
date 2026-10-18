@@ -98,6 +98,7 @@ shared/
   runtime/     validated configuration and graceful service host
   testing/     isolated test databases with safety guards
 tests/e2e/     end-to-end tests against isolated vhosts and databases
+tools/cli/     developer tools: order-flow demo, status view, log trace
 docs/          architecture and reliability deep dives
 ```
 
@@ -253,7 +254,20 @@ The cost of these guarantees is **duplicates**: a crash between "publish" and "a
 * Node.js **22 or 24** (LTS)
 * Docker with Docker Compose
 
-### Install and start the infrastructure
+### Quick start: the whole system and a scripted demo
+
+```bash
+git clone https://github.com/kris7011/commerce-flow.git
+cd commerce-flow
+npm ci
+npm run stack:up   # RabbitMQ, PostgreSQL and all five services as containers
+npm run demo       # orders, a duplicate event and an invalid request, with checks
+npm run status     # readiness, stock, outbox, queue and dead-letter depths
+```
+
+The demo prints the events of each order as they cross the exchange, and checks the results: stock, notifications, outbox and dead-letter queues. It exits non-zero if anything is wrong, and CI runs it against the containers on every push. [docs/demo.md](docs/demo.md) explains each step, and `npm run trace` follows one order through the logs of all services.
+
+### Install and start the infrastructure (services from source)
 
 ```bash
 git clone https://github.com/kris7011/commerce-flow.git
@@ -329,7 +343,7 @@ Each service validates its environment at startup and fails with a message that 
 
 ### Logs
 
-Every service writes one JSON object per line, with the service name, a message and context such as `eventId`, `orderId`, `correlationId`, `attempt` and `queueName`. Failures include a serialised error. To follow one order across all services, filter the logs on its `correlationId`.
+Every service writes one JSON object per line, with the service name, a message and context such as `eventId`, `orderId`, `correlationId`, `attempt` and `queueName`. Failures include a serialised error. To follow one order across all services, pipe the logs into `npm run --silent trace -- <correlation-or-order-id>`. It selects that workflow's lines from all services and sorts them by time (see [docs/demo.md](docs/demo.md#npm-run-trace-one-order-across-all-logs)).
 
 ---
 
@@ -379,6 +393,8 @@ GitHub Actions ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs on 
 
 `npm ci` → `npm audit --audit-level=moderate` → lint → typecheck → build → unit tests → `docker compose up --wait` → integration tests → E2E and recovery tests → container logs on failure → `docker compose down --volumes` (always).
 
+A second job, **Full-stack demo (containers)**, builds the service image, starts the complete system with `docker compose --profile app up --wait`, runs `npm run demo` and `npm run status` against it, and traces the demo order through the container logs.
+
 ---
 
 ## Architectural decisions and trade-offs
@@ -416,8 +432,8 @@ GitHub Actions ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs on 
 * **Ordering.** Events are published roughly in outbox order, but concurrent relays and retries can reorder them. This is harmless here because each order produces one inventory event.
 * **Unroutable events from Payment and Delivery.** If a binding were missing despite the provisioned topology, their publish fails and the input message is retried and then dead-lettered (not lost, but it needs a manual replay). Inventory's outbox keeps retrying instead.
 * **Outbox retention.** Published rows are kept indefinitely. Production would prune them.
-* **Observability** is limited to structured logs, readiness and the outbox diagnostics endpoint. There are no metrics backend or distributed traces (OpenTelemetry would be the next step).
-* **The services are not containerised.** Docker Compose provides only the infrastructure, and the services run from source with `tsx`.
+* **Observability** is limited to structured logs, readiness, the outbox diagnostics endpoint and the developer tools (`demo`, `status`, `trace`). There are no metrics backend or distributed traces (OpenTelemetry would be the next step).
+* **The containers are for local use and CI.** The Compose `app` profile runs one image per service on a single host. There is no orchestrator manifest, image registry or TLS configuration.
 * **Windows test flakiness.** On Windows with Docker Desktop, a service process occasionally terminates with a native fast-fail (`0xC0000409`) while the RabbitMQ container restarts during the recovery E2E test (about 2 in 15 local runs). The process dies in native code, so no JavaScript handler can intercept it. It does not reproduce on Linux CI or with 1,000 simulated handshake failures in isolation. JavaScript-level fatal errors are logged before a controlled exit; a production deployment would rely on a process supervisor's restart policy for native crashes.
 
 ---
@@ -426,6 +442,7 @@ GitHub Actions ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs on 
 
 * [docs/architecture.md](docs/architecture.md): boundaries, ports and adapters, the messaging layer and the service host
 * [docs/reliability.md](docs/reliability.md): failure-mode analysis and how each failure is handled and tested
+* [docs/demo.md](docs/demo.md): the containerised stack, the scripted demo, `status` and `trace`
 
 ---
 

@@ -86,3 +86,53 @@ jobs:
             - name: Stop infrastructure
               if: always()
               run: docker compose down --volumes
+
+    # Builds the service image and runs the whole system the way a
+    # reviewer would locally: five containers plus RabbitMQ and
+    # PostgreSQL, then the scripted order-flow demo against them.
+    full-stack:
+        name: Full-stack demo (containers)
+        runs-on: ubuntu-latest
+        timeout-minutes: 20
+
+        env:
+            DEMO_RUN_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}
+
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@v7
+
+            - name: Set up Node.js
+              uses: actions/setup-node@v7
+              with:
+                  node-version: 24.x
+                  cache: npm
+                  cache-dependency-path: package-lock.json
+
+            - name: Install dependencies
+              run: npm ci
+
+            - name: Build and start all services as containers
+              run: docker compose --profile app up -d --build --wait --wait-timeout 180
+
+            - name: Show the service image
+              run: docker image ls commerce-flow-service:local
+
+            - name: Run the order-flow demo
+              run: npm run demo
+
+            - name: Show system status
+              run: npm run status
+
+            - name: Trace the demo order through all service logs
+              run: |
+                  docker compose --profile app logs --no-log-prefix --no-color \
+                      | npm run --silent trace -- "demo-${DEMO_RUN_ID}-success"
+
+            - name: Show container logs on failure
+              if: failure()
+              run: docker compose --profile app logs --no-color --tail=300
+
+            - name: Stop the stack
+              if: always()
+              run: docker compose --profile app down --volumes
