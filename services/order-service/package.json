@@ -8,7 +8,7 @@
         "dev": "tsx src/index.ts",
         "build": "tsc -p tsconfig.json",
         "typecheck": "tsc -p tests/tsconfig.json --noEmit",
-        "test": "node --import tsx --test tests/orderService.test.ts tests/orderRequestValidator.test.ts tests/orderApp.test.ts",
+        "test": "node --import tsx --test tests/orderService.test.ts tests/orderRequestValidator.test.ts tests/orderContract.test.ts tests/orderApp.test.ts",
         "test:integration": "node --import tsx --test tests/orderApp.integration.test.ts"
     },
     "dependencies": {
