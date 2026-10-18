@@ -1,0 +1,15 @@
+{
+    "name": "@commerce-flow/cli",
+    "version": "0.1.0",
+    "private": true,
+    "type": "module",
+    "description": "Developer tools: the order-flow demo, a system status view and a log trace by correlation id.",
+    "scripts": {
+        "typecheck": "tsc -p tests/tsconfig.json --noEmit",
+        "test": "node --import tsx --test tests/endpoints.test.ts tests/timeline.test.ts tests/logTrace.test.ts"
+    },
+    "dependencies": {
+        "@commerce-flow/contracts": "file:../../shared/contracts",
+        "amqplib": "^0.10.5"
+    }
+}

@@ -3,8 +3,103 @@
 # DEVELOPMENT ONLY: the default credentials below are well known and
 # the ports are published on 127.0.0.1 only. Override them through
 # environment variables (see .env.example); never reuse them elsewhere.
+#
+#   docker compose up -d --wait rabbitmq postgres
+#       infrastructure only (run the services with npm run dev:*)
+#
+#   docker compose --profile app up -d --build --wait
+#       infrastructure plus all five services as containers
+
+# Shared settings of the five service containers. They all run the same
+# image (see Dockerfile) with a different entry point.
+x-commerce-service: &commerce-service
+  build:
+    context: .
+  image: commerce-flow-service:local
+  profiles:
+    - app
+  init: true
+  restart: unless-stopped
+  # Matches the services' own graceful shutdown (drain consumers, let
+  # the outbox relay finish its batch, close connections).
+  stop_grace_period: 30s
+  depends_on:
+    rabbitmq:
+      condition: service_healthy
+
+x-rabbitmq-url: &rabbitmq-url
+  amqp://${RABBITMQ_USER:-guest}:${RABBITMQ_PASSWORD:-guest}@rabbitmq:5672
+
+# Readiness (not liveness): healthy once the service can use RabbitMQ
+# (and, for Inventory, PostgreSQL). `--wait` blocks on this.
+x-healthcheck-timing: &healthcheck-timing
+  interval: 5s
+  timeout: 5s
+  retries: 24
+  start_period: 10s
 
 services:
+  order-service:
+    <<: *commerce-service
+    command: ["node", "--conditions=production", "services/order-service/dist/index.js"]
+    environment:
+      RABBITMQ_URL: *rabbitmq-url
+    ports:
+      - "127.0.0.1:3001:3001"
+    healthcheck:
+      <<: *healthcheck-timing
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/ready').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+
+  payment-service:
+    <<: *commerce-service
+    command: ["node", "--conditions=production", "services/payment-service/dist/index.js"]
+    environment:
+      RABBITMQ_URL: *rabbitmq-url
+    ports:
+      - "127.0.0.1:3002:3002"
+    healthcheck:
+      <<: *healthcheck-timing
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3002/ready').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+
+  inventory-service:
+    <<: *commerce-service
+    command: ["node", "--conditions=production", "services/inventory-service/dist/index.js"]
+    environment:
+      RABBITMQ_URL: *rabbitmq-url
+      DATABASE_URL: postgresql://${POSTGRES_USER:-commerce_flow}:${POSTGRES_PASSWORD:-commerce_flow}@postgres:5432/commerce_flow
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:3003:3003"
+    healthcheck:
+      <<: *healthcheck-timing
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3003/ready').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+
+  delivery-service:
+    <<: *commerce-service
+    command: ["node", "--conditions=production", "services/delivery-service/dist/index.js"]
+    environment:
+      RABBITMQ_URL: *rabbitmq-url
+    ports:
+      - "127.0.0.1:3004:3004"
+    healthcheck:
+      <<: *healthcheck-timing
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3004/ready').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+
+  notification-service:
+    <<: *commerce-service
+    command: ["node", "--conditions=production", "services/notification-service/dist/index.js"]
+    environment:
+      RABBITMQ_URL: *rabbitmq-url
+    ports:
+      - "127.0.0.1:3005:3005"
+    healthcheck:
+      <<: *healthcheck-timing
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3005/ready').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+
   rabbitmq:
     image: rabbitmq:3.13-management
     container_name: commerce-flow-rabbitmq
