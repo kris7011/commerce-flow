@@ -310,6 +310,8 @@ The demo catalogue contains `washing-machine-01` (10), `dishwasher-01` (5) and `
 | Inventory | `GET /diagnostics/outbox` | Pending count, oldest pending event, max attempts and relay status (no payloads) |
 | Notification | `GET /notifications` | Notifications created so far |
 
+`POST /orders` is the only entry point for outside data, so it is at least as strict as the event contracts: identifiers are limited to the contracts' 200 characters, quantities to the PostgreSQL `INTEGER` range, an order to 100 items, and the total must be a finite number. A request that passes validation therefore always produces an `OrderCreated` event that Payment Service accepts; `services/order-service/tests/orderContract.test.ts` checks this at the boundaries.
+
 ### Configuration
 
 Each service validates its environment at startup and fails with a message that names the variable. Error messages never echo credentials. With `NODE_ENV=production`, `DATABASE_URL` and `RABBITMQ_URL` must be set explicitly, so the development defaults are never used.
