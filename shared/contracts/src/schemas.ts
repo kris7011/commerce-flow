@@ -19,10 +19,18 @@ import type {
  * coordinated deployment. Breaking changes require a new event type.
  */
 
+/**
+ * Maximum length of every identifier in an event. Producers that accept
+ * identifiers from outside (the Order API) must enforce it themselves,
+ * otherwise they would emit events that every consumer dead-letters.
+ */
+export const EVENT_IDENTIFIER_MAX_LENGTH =
+    200;
+
 const identifierSchema =
     z.string()
         .min(1)
-        .max(200);
+        .max(EVENT_IDENTIFIER_MAX_LENGTH);
 
 const orderItemSchema:
     z.ZodType<OrderItem> =

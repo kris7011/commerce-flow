@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type {
-    OrderItem
+import {
+    EVENT_IDENTIFIER_MAX_LENGTH,
+    type OrderItem
 } from "@commerce-flow/contracts";
 import {
+    MAX_ORDER_ITEM_QUANTITY,
+    MAX_ORDER_ITEMS,
     parseCreateOrderRequest
 } from "../src/orderRequestValidator.js";
 
@@ -193,6 +196,142 @@ test(
                 false
             );
         }
+    }
+);
+
+test(
+    "enforces the identifier length of the event contracts",
+    () => {
+        const longest =
+            "x".repeat(
+                EVENT_IDENTIFIER_MAX_LENGTH
+            );
+
+        const tooLong =
+            `${longest}x`;
+
+        assert.equal(
+            parseCreateOrderRequest({
+                customerId: longest,
+                items: [
+                    {
+                        ...validOrderItem(),
+                        productId: longest
+                    }
+                ]
+            }).success,
+            true
+        );
+
+        assert.equal(
+            parseCreateOrderRequest({
+                customerId: tooLong,
+                items: [
+                    validOrderItem()
+                ]
+            }).success,
+            false
+        );
+
+        assert.equal(
+            parseCreateOrderRequest({
+                customerId:
+                    "customer-001",
+                items: [
+                    {
+                        ...validOrderItem(),
+                        productId: tooLong
+                    }
+                ]
+            }).success,
+            false
+        );
+    }
+);
+
+test(
+    "bounds the item quantity and the number of items",
+    () => {
+        const withQuantity =
+            (quantity: number) =>
+                parseCreateOrderRequest({
+                    customerId:
+                        "customer-001",
+                    items: [
+                        {
+                            ...validOrderItem(),
+                            quantity
+                        }
+                    ]
+                }).success;
+
+        assert.equal(
+            withQuantity(
+                MAX_ORDER_ITEM_QUANTITY
+            ),
+            true
+        );
+
+        assert.equal(
+            withQuantity(
+                MAX_ORDER_ITEM_QUANTITY + 1
+            ),
+            false
+        );
+
+        const withItemCount =
+            (count: number) =>
+                parseCreateOrderRequest({
+                    customerId:
+                        "customer-001",
+                    items:
+                        Array.from(
+                            {
+                                length: count
+                            },
+                            validOrderItem
+                        )
+                }).success;
+
+        assert.equal(
+            withItemCount(
+                MAX_ORDER_ITEMS
+            ),
+            true
+        );
+
+        assert.equal(
+            withItemCount(
+                MAX_ORDER_ITEMS + 1
+            ),
+            false
+        );
+    }
+);
+
+test(
+    "rejects an order whose total overflows",
+    () => {
+        const result =
+            parseCreateOrderRequest({
+                customerId:
+                    "customer-001",
+                items: [
+                    {
+                        productId:
+                            "product-001",
+                        quantity:
+                            MAX_ORDER_ITEM_QUANTITY,
+                        unitPrice:
+                            Number.MAX_VALUE
+                    }
+                ]
+            });
+
+        assert.equal(
+            result.success,
+            false
+        );
     }
 );
 
