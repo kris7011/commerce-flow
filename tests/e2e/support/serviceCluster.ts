@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import {
+    randomUUID
+} from "node:crypto";
+import {
     spawn,
     type ChildProcess
 } from "node:child_process";
@@ -444,7 +447,9 @@ export class ServiceCluster {
 export async function createOrder(
     orderServiceUrl: string,
     correlationId: string,
-    items: readonly OrderItem[]
+    items: readonly OrderItem[],
+    idempotencyKey: string = randomUUID(),
+    expectedStatus = 201
 ): Promise<CreatedOrderResponse> {
     const response =
         await fetch(
@@ -455,7 +460,9 @@ export async function createOrder(
                     "content-type":
                         "application/json",
                     "x-correlation-id":
-                        correlationId
+                        correlationId,
+                    "idempotency-key":
+                        idempotencyKey
                 },
                 body:
                     JSON.stringify({
@@ -471,12 +478,60 @@ export async function createOrder(
 
     assert.equal(
         response.status,
-        201,
-        `Expected HTTP 201 from POST /orders, received ` +
+        expectedStatus,
+        `Expected HTTP ${expectedStatus} from POST /orders, received ` +
         `${response.status}: ${JSON.stringify(body)}`
     );
 
     return body as CreatedOrderResponse;
+}
+
+export interface OrderTimelineView {
+    readonly order: {
+        readonly orderId: string;
+        readonly status: string;
+    };
+    readonly outcome: string;
+    readonly entries: readonly {
+        readonly kind: string;
+        readonly eventType: string | null;
+        readonly service: string;
+        readonly simulated: boolean;
+        readonly deliveries: number;
+    }[];
+    readonly publication: {
+        readonly publishedAt: string | null;
+        readonly attempts: number;
+    } | null;
+}
+
+/** Waits until the Order Service shows the order with `status` and a confirmed OrderCreated. */
+export async function waitForOrderTimeline(
+    orderServiceUrl: string,
+    orderId: string,
+    status: string,
+    timeoutInMs: number
+): Promise<OrderTimelineView> {
+    let view:
+        OrderTimelineView | undefined;
+
+    await waitUntil(
+        async () => {
+            view =
+                await getJson<OrderTimelineView>(
+                    `${orderServiceUrl}/orders/${orderId}`
+                );
+
+            return (
+                view.order.status === status &&
+                view.publication?.publishedAt !== null
+            );
+        },
+        timeoutInMs,
+        `order ${orderId} to reach ${status}`
+    );
+
+    return view!;
 }
 
 export async function getNotifications(
