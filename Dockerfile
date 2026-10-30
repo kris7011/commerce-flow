@@ -65,6 +65,7 @@ COPY --from=build /app/shared/logging/dist shared/logging/dist
 COPY --from=build /app/shared/runtime/dist shared/runtime/dist
 COPY --from=build /app/shared/persistence/dist shared/persistence/dist
 COPY --from=build /app/services/order-service/dist services/order-service/dist
+COPY --from=build /app/services/order-service/public services/order-service/public
 COPY --from=build /app/services/payment-service/dist services/payment-service/dist
 COPY --from=build /app/services/inventory-service/dist services/inventory-service/dist
 COPY --from=build /app/services/delivery-service/dist services/delivery-service/dist

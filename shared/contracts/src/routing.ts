@@ -68,6 +68,18 @@ export const QUEUES = {
             ROUTING_KEYS.DeliveryBooked,
             ROUTING_KEYS.InventoryReservationFailed
         ]
+    },
+    // The Order Service records every step of its orders for the
+    // order timeline (a read model; it does not drive the workflow).
+    orderWorkflowEvents: {
+        queueName:
+            "order-service.order-events",
+        routingKeys: [
+            ROUTING_KEYS.PaymentAuthorized,
+            ROUTING_KEYS.InventoryReserved,
+            ROUTING_KEYS.InventoryReservationFailed,
+            ROUTING_KEYS.DeliveryBooked
+        ]
     }
 } as const satisfies Record<string, QueueBinding>;
 

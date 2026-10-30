@@ -4,3 +4,4 @@ export * from "./outbox/outbox.js";
 export * from "./outbox/outboxRelay.js";
 export * from "./outbox/postgresOutboxStore.js";
 export * from "./outbox/rabbitMqOutboxPublisher.js";
+export * from "./transaction.js";
