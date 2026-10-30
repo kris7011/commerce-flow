@@ -1,4 +1,7 @@
 import {
+    randomUUID
+} from "node:crypto";
+import {
     resolveEndpoints
 } from "./endpoints.js";
 import type {
@@ -141,11 +144,17 @@ export interface SubmittedOrder {
     readonly status: number;
     readonly orderId: string | undefined;
     readonly submittedAt: number;
+    readonly idempotencyKey: string;
 }
 
+/**
+ * POST /orders with an Idempotency-Key. Pass the key of an earlier
+ * submission to retry it; a new key is generated otherwise.
+ */
 export async function submitOrder(
     correlationId: string,
-    body: unknown
+    body: unknown,
+    idempotencyKey: string = randomUUID()
 ): Promise<SubmittedOrder> {
     const submittedAt =
         Date.now();
@@ -157,7 +166,8 @@ export async function submitOrder(
                 method: "POST",
                 headers: {
                     "content-type": "application/json",
-                    "x-correlation-id": correlationId
+                    "x-correlation-id": correlationId,
+                    "idempotency-key": idempotencyKey
                 },
                 body: JSON.stringify(body)
             }
@@ -173,6 +183,7 @@ export async function submitOrder(
 
     console.log(
         `  POST /orders  x-correlation-id: ${correlationId}` +
+        `  Idempotency-Key: ${idempotencyKey.slice(0, 8)}…` +
         `  ->  HTTP ${response.status}` +
         (orderId ? `  orderId ${orderId}` : "")
     );
@@ -180,7 +191,55 @@ export async function submitOrder(
     return {
         status: response.status,
         orderId,
-        submittedAt
+        submittedAt,
+        idempotencyKey
+    };
+}
+
+export interface OrderTimelineSnapshot {
+    readonly status: string;
+    readonly outcome: string;
+    readonly entries: readonly {
+        readonly kind: string;
+        readonly title: string;
+        readonly service: string;
+        readonly simulated: boolean;
+    }[];
+}
+
+/** The order as the Order Service's timeline endpoint shows it. */
+export async function readOrderTimeline(
+    orderId: string
+): Promise<OrderTimelineSnapshot | undefined> {
+    const response =
+        await requestJson(
+            `${endpoints.services["order-service"]}/orders/${orderId}`
+        );
+
+    if (
+        response.status !== 200 ||
+        typeof response.body !== "object" ||
+        response.body === null
+    ) {
+        return undefined;
+    }
+
+    const body =
+        response.body as {
+            order: {
+                status: string;
+            };
+            outcome: string;
+            entries: OrderTimelineSnapshot["entries"];
+        };
+
+    return {
+        status:
+            body.order.status,
+        outcome:
+            body.outcome,
+        entries:
+            body.entries
     };
 }
 

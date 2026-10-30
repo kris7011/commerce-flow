@@ -12,6 +12,7 @@ import {
     getJson,
     getStock,
     waitForNotification,
+    waitForOrderTimeline,
     waitUntil
 } from "./support/serviceCluster.js";
 
@@ -58,20 +59,46 @@ test(
             const successfulCorrelationId =
                 `e2e-success-${randomUUID()}`;
 
+            const successfulKey =
+                randomUUID();
+
+            const successfulItems = [
+                {
+                    productId: "washing-machine-01",
+                    quantity: 1,
+                    unitPrice: 749.95
+                }
+            ];
+
             const successfulOrder =
                 await createOrder(
                     cluster.url(
                         "order-service"
                     ),
                     successfulCorrelationId,
-                    [
-                        {
-                            productId: "washing-machine-01",
-                            quantity: 1,
-                            unitPrice: 749.95
-                        }
-                    ]
+                    successfulItems,
+                    successfulKey
                 );
+
+            // A client retry (for example after a timeout) with the same
+            // key returns the same order instead of creating a second one.
+            const retriedOrder =
+                await createOrder(
+                    cluster.url(
+                        "order-service"
+                    ),
+                    // Same correlation id: the helper derives the
+                    // customer from it, so the request is identical.
+                    successfulCorrelationId,
+                    successfulItems,
+                    successfulKey,
+                    200
+                );
+
+            assert.deepEqual(
+                retriedOrder,
+                successfulOrder
+            );
 
             assert.equal(
                 successfulOrder.totalAmount,
@@ -94,6 +121,45 @@ test(
             assert.match(
                 deliveryNotification.message,
                 /Delivery has been booked/
+            );
+
+            const successfulTimeline =
+                await waitForOrderTimeline(
+                    cluster.url(
+                        "order-service"
+                    ),
+                    successfulOrder.orderId,
+                    "DeliveryBooked",
+                    20_000
+                );
+
+            assert.equal(
+                successfulTimeline.outcome,
+                "Completed"
+            );
+
+            assert.deepEqual(
+                successfulTimeline.entries
+                    .filter(entry => entry.kind === "Event")
+                    .map(entry => [entry.eventType, entry.service, entry.simulated])
+                    .sort(),
+                [
+                    ["DeliveryBooked", "delivery-service", true],
+                    ["InventoryReserved", "inventory-service", false],
+                    ["PaymentAuthorized", "payment-service", true]
+                ]
+            );
+
+            assert.deepEqual(
+                successfulTimeline.entries
+                    .filter(entry => entry.kind !== "Event")
+                    .map(entry => entry.kind)
+                    .sort(),
+                [
+                    "Accepted",
+                    "Published",
+                    "Replayed"
+                ]
             );
 
             const failedCorrelationId =
@@ -130,6 +196,21 @@ test(
             assert.match(
                 failureNotification.message,
                 /Inventory reservation failed/
+            );
+
+            const failedTimeline =
+                await waitForOrderTimeline(
+                    cluster.url(
+                        "order-service"
+                    ),
+                    failedOrder.orderId,
+                    "InventoryReservationFailed",
+                    20_000
+                );
+
+            assert.equal(
+                failedTimeline.outcome,
+                "Failed"
             );
 
             assert.deepEqual(

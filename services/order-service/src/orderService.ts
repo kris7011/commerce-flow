@@ -1,4 +1,7 @@
-import { randomUUID } from "node:crypto";
+import {
+    createHash,
+    randomUUID
+} from "node:crypto";
 import type {
     OrderCreatedEvent,
     OrderItem
@@ -19,6 +22,12 @@ export interface CreatedOrderResponse {
 export interface CreateOrderResult {
     event: OrderCreatedEvent;
     response: CreatedOrderResponse;
+
+    /**
+     * Identifies the request content, so a reused Idempotency-Key can
+     * be told apart from a genuine retry of the same request.
+     */
+    requestFingerprint: string;
 }
 
 const CORRELATION_ID_PATTERN =
@@ -76,7 +85,11 @@ export class OrderService {
                 status: "Created",
                 totalAmount,
                 correlationId
-            }
+            },
+            requestFingerprint:
+                fingerprintOrderRequest(
+                    request
+                )
         };
     }
 
@@ -112,4 +125,38 @@ function calculateTotalAmount(
     }, 0);
 
     return Number(total.toFixed(2));
+}
+
+/**
+ * SHA-256 of the request in a canonical form: fixed key order, item
+ * order preserved (it is part of the order), unknown fields excluded.
+ * Two requests with the same fingerprint describe the same order.
+ */
+export function fingerprintOrderRequest(
+    request: CreateOrderRequest
+): string {
+    const canonical =
+        JSON.stringify({
+            customerId:
+                request.customerId,
+            items:
+                request.items.map(item => ({
+                    productId:
+                        item.productId,
+                    quantity:
+                        item.quantity,
+                    unitPrice:
+                        item.unitPrice
+                }))
+        });
+
+    return createHash(
+        "sha256"
+    )
+        .update(
+            canonical
+        )
+        .digest(
+            "hex"
+        );
 }

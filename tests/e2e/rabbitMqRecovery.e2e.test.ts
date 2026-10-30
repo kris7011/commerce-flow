@@ -20,6 +20,7 @@ import {
     ServiceCluster,
     createOrder,
     waitForNotification,
+    waitForOrderTimeline,
     waitUntil
 } from "./support/serviceCluster.js";
 
@@ -104,6 +105,26 @@ test(
                 );
             }
 
+            // The broker is down, but the order is durable: it is
+            // accepted now and its event is published after recovery.
+            const offlineCorrelationId =
+                `e2e-offline-${randomUUID()}`;
+
+            const offlineOrder =
+                await createOrder(
+                    cluster.url(
+                        "order-service"
+                    ),
+                    offlineCorrelationId,
+                    [
+                        {
+                            productId: "dishwasher-01",
+                            quantity: 1,
+                            unitPrice: 3999
+                        }
+                    ]
+                );
+
             runDockerCompose(
                 "up",
                 "-d",
@@ -164,6 +185,21 @@ test(
             assert.equal(
                 notification.orderId,
                 order.orderId
+            );
+
+            const offlineTimeline =
+                await waitForOrderTimeline(
+                    cluster.url(
+                        "order-service"
+                    ),
+                    offlineOrder.orderId,
+                    "DeliveryBooked",
+                    30_000
+                );
+
+            assert.equal(
+                offlineTimeline.outcome,
+                "Completed"
             );
         } catch (error) {
             throw new Error(

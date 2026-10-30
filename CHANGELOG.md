@@ -2,6 +2,24 @@
 
 Notable changes to CommerceFlow are documented here. This repository is a **portfolio and architecture demonstration**, not a published npm package or a production commerce platform.
 
+## [1.1.0] - 2026-10-30
+
+Durable, idempotent order submission and a visual order timeline.
+
+### Added
+
+- **Order persistence:** Order Service stores orders in PostgreSQL (`orders`, `order_timeline`, `order_outbox`) with its own versioned migrations.
+- **Idempotent `POST /orders`:** a required `Idempotency-Key` header. A retry with the same key and request returns the original order (`200`, `Idempotent-Replayed: true`); the same key with a different request is rejected (`422`). A unique index makes this hold under concurrency.
+- **Order outbox:** `OrderCreated` is committed with the order and published by the shared outbox relay, so orders are accepted while RabbitMQ is down.
+- **Order timeline:** Order Service consumes the workflow events on `order-service.order-events`, records each event once (counting redeliveries) and moves the order status forward only. `GET /orders`, `GET /orders/{id}` and a timeline page at `/` show the actual steps, outcome, duplicates and which steps are simulated.
+- **Shared persistence package:** `@commerce-flow/persistence` (pool, migration runner, transactional outbox, transaction helper), now used by Order and Inventory.
+
+### Changed
+
+- `POST /orders` without an `Idempotency-Key` is rejected with `400` (breaking change for API clients).
+- `POST /orders` no longer answers `503` when RabbitMQ is unavailable; it answers `503` only when PostgreSQL is unavailable.
+- Order Service readiness now also requires PostgreSQL.
+
 ## [1.0.0] - 2026-10-15
 
 First portfolio release of the event-driven commerce workflow.

@@ -13,6 +13,7 @@ import {
     heading,
     poll,
     printTimeline,
+    readOrderTimeline,
     reportResult,
     runId,
     sleep,
@@ -65,19 +66,21 @@ async function successfulOrder(
         return undefined;
     }
 
+    const request = {
+        customerId: "demo-customer-1",
+        items: [
+            {
+                productId,
+                quantity: 1,
+                unitPrice: 4999
+            }
+        ]
+    };
+
     const order =
         await submitOrder(
             `demo-${runId}-success`,
-            {
-                customerId: "demo-customer-1",
-                items: [
-                    {
-                        productId,
-                        quantity: 1,
-                        unitPrice: 4999
-                    }
-                ]
-            }
+            request
         );
 
     if (
@@ -89,6 +92,21 @@ async function successfulOrder(
 
     const orderId =
         order.orderId;
+
+    // A client that did not see the answer (timeout, lost connection)
+    // retries with the same Idempotency-Key.
+    const retry =
+        await submitOrder(
+            `demo-${runId}-success-retry`,
+            request,
+            order.idempotencyKey
+        );
+
+    check(
+        "a retry with the same Idempotency-Key answers 200 with the same order",
+        retry.status === 200 &&
+        retry.orderId === orderId
+    );
 
     const delivered =
         await tap.waitFor(
@@ -132,8 +150,34 @@ async function successfulOrder(
     );
 
     check(
-        `stock of ${productId} decreased by exactly 1`,
+        `stock of ${productId} decreased by exactly 1 (the retry created no order)`,
         stockAfter[productId] === available - 1
+    );
+
+    const timeline =
+        await poll(
+            () => readOrderTimeline(orderId),
+            view =>
+                view?.status === "DeliveryBooked" &&
+                view.entries.some(entry => entry.kind === "Published"),
+            FLOW_TIMEOUT_IN_MS
+        );
+
+    console.log(
+        `  Order timeline (GET /orders/${orderId}):`
+    );
+
+    for (const entry of timeline?.entries ?? []) {
+        console.log(
+            `    ${entry.title.padEnd(40)}${entry.service}` +
+            (entry.simulated ? "  (simulated)" : "")
+        );
+    }
+
+    check(
+        "the Order Service timeline shows the completed workflow and the replayed retry",
+        timeline?.outcome === "Completed" &&
+        timeline.entries.some(entry => entry.kind === "Replayed")
     );
 
     return placed;

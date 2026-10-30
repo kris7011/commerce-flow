@@ -21,6 +21,7 @@ COPY shared/messaging/package.json shared/messaging/
 COPY shared/logging/package.json shared/logging/
 COPY shared/testing/package.json shared/testing/
 COPY shared/runtime/package.json shared/runtime/
+COPY shared/persistence/package.json shared/persistence/
 COPY services/order-service/package.json services/order-service/
 COPY services/payment-service/package.json services/payment-service/
 COPY services/inventory-service/package.json services/inventory-service/
@@ -47,6 +48,7 @@ COPY --from=build /app/shared/messaging/package.json shared/messaging/
 COPY --from=build /app/shared/logging/package.json shared/logging/
 COPY --from=build /app/shared/testing/package.json shared/testing/
 COPY --from=build /app/shared/runtime/package.json shared/runtime/
+COPY --from=build /app/shared/persistence/package.json shared/persistence/
 COPY --from=build /app/services/order-service/package.json services/order-service/
 COPY --from=build /app/services/payment-service/package.json services/payment-service/
 COPY --from=build /app/services/inventory-service/package.json services/inventory-service/
@@ -61,7 +63,9 @@ COPY --from=build /app/shared/contracts/dist shared/contracts/dist
 COPY --from=build /app/shared/messaging/dist shared/messaging/dist
 COPY --from=build /app/shared/logging/dist shared/logging/dist
 COPY --from=build /app/shared/runtime/dist shared/runtime/dist
+COPY --from=build /app/shared/persistence/dist shared/persistence/dist
 COPY --from=build /app/services/order-service/dist services/order-service/dist
+COPY --from=build /app/services/order-service/public services/order-service/public
 COPY --from=build /app/services/payment-service/dist services/payment-service/dist
 COPY --from=build /app/services/inventory-service/dist services/inventory-service/dist
 COPY --from=build /app/services/delivery-service/dist services/delivery-service/dist

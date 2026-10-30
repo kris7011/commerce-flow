@@ -31,7 +31,7 @@ x-rabbitmq-url: &rabbitmq-url
   amqp://${RABBITMQ_USER:-guest}:${RABBITMQ_PASSWORD:-guest}@rabbitmq:5672
 
 # Readiness (not liveness): healthy once the service can use RabbitMQ
-# (and, for Inventory, PostgreSQL). `--wait` blocks on this.
+# (and, for Order and Inventory, PostgreSQL). `--wait` blocks on this.
 x-healthcheck-timing: &healthcheck-timing
   interval: 5s
   timeout: 5s
@@ -44,6 +44,12 @@ services:
     command: ["node", "--conditions=production", "services/order-service/dist/index.js"]
     environment:
       RABBITMQ_URL: *rabbitmq-url
+      DATABASE_URL: postgresql://${POSTGRES_USER:-commerce_flow}:${POSTGRES_PASSWORD:-commerce_flow}@postgres:5432/commerce_flow
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
     ports:
       - "127.0.0.1:3001:3001"
     healthcheck:

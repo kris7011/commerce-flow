@@ -11,6 +11,11 @@ import {
     RabbitMqSupervisor
 } from "@commerce-flow/messaging";
 import {
+    OutboxRelay,
+    PostgresOutboxStore,
+    RabbitMqOutboxPublisher
+} from "@commerce-flow/persistence";
+import {
     runService
 } from "@commerce-flow/runtime";
 import {
@@ -27,15 +32,6 @@ import {
 import {
     InventoryService
 } from "./inventoryService.js";
-import {
-    OutboxRelay
-} from "./outbox/outboxRelay.js";
-import {
-    PostgresOutboxStore
-} from "./outbox/postgresOutboxStore.js";
-import {
-    RabbitMqOutboxPublisher
-} from "./outbox/rabbitMqOutboxPublisher.js";
 import {
     createPaymentAuthorizedHandler
 } from "./paymentAuthorizedHandler.js";
@@ -95,7 +91,8 @@ const rabbitMq =
 
 const outboxStore =
     new PostgresOutboxStore(
-        databasePool
+        databasePool,
+        "inventory_outbox"
     );
 
 const outboxRelay =

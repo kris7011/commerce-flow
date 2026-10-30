@@ -34,7 +34,7 @@ The demo connects a temporary, exclusive queue to the `commerce.events` exchange
 | Step | What it does | What it checks |
 |---|---|---|
 | 1. Readiness | Polls `GET /ready` on all five services (up to 60 s) | Every service can use its dependencies |
-| 2. Successful order | `POST /orders` for one unit of the product with the most stock | `201`. The timeline shows `OrderCreated → PaymentAuthorized → InventoryReserved → DeliveryBooked`, a `DeliveryBooked` notification exists, stock drops by exactly 1 |
+| 2. Successful order | `POST /orders` for one unit of the product with the most stock, then the same request again with the same `Idempotency-Key` | `201`, then `200` with the same order id. The observed events show `OrderCreated → PaymentAuthorized → InventoryReserved → DeliveryBooked`, a `DeliveryBooked` notification exists, stock drops by exactly 1 (the retry created nothing), and `GET /orders/{id}` shows the completed timeline including the replayed retry |
 | 3. Unfulfillable order | Orders one more unit than is in stock | `InventoryReservationFailed` and no `DeliveryBooked`, a failure notification exists, stock is unchanged |
 | 4. Duplicate event | Re-publishes step 2's `PaymentAuthorized` under a **new event id** | Still exactly one `InventoryReserved` for that order, and stock is unchanged. The event-id cache cannot recognise this duplicate, so only Inventory's durable one-reservation-per-order rule protects the stock |
 | 5. Invalid request | `POST /orders` with an empty item list | `400`, and no event is published for its correlation id |
@@ -109,16 +109,17 @@ The same run's `trace` step, for the successful order, shows the services' log l
 npm run demo:recovery
 ```
 
-This scenario needs the containerised stack, because it stops and starts the `postgres` container with `docker compose`. It shows what happens when a dependency is down for longer than the in-process retries last, and how the system is brought back:
+This scenario needs the containerised stack, because it stops and starts the `payment-service` and `postgres` containers with `docker compose`. It shows what happens when a dependency is down for longer than the in-process retries last, and how the system is brought back:
 
 | Step | What happens | What it checks |
 |---|---|---|
-| 1. Readiness | As in `npm run demo` | All services are ready, and `inventory-service.payment-authorized.dead-letter` is empty |
-| 2. Outage | `docker compose stop postgres`, then an order | Inventory reports `database: NotReady`. Order still answers `201`, because it needs no database. Inventory retries the `PaymentAuthorized` message (5 attempts with backoff) and then dead-letters it. No `InventoryReserved` is published |
-| 3. Recovery | `docker compose start postgres` | Inventory reports `database: Ready` again without a restart |
-| 4. Replay | `replayDeadLetters` for Inventory's queue | Exactly one message is replayed. The order completes with `DeliveryBooked`, the customer is notified, stock drops by exactly 1 and the dead-letter queue is empty |
+| 1. Readiness | As in `npm run demo` | All services are ready; the Inventory and order-timeline dead-letter queues are empty |
+| 2. Waiting order | `docker compose stop payment-service`, then an order | Order answers `201` (it stores the order in PostgreSQL); `OrderCreated` waits in Payment's queue |
+| 3. Outage | `docker compose stop postgres`, then `start payment-service` | Inventory reports `database: NotReady`, retries `PaymentAuthorized` (5 attempts with backoff) and dead-letters it. The Order Service's timeline consumer cannot record the event either and dead-letters its copy. No `InventoryReserved` is published |
+| 4. Recovery | `docker compose start postgres` | Inventory reports `database: Ready` again without a restart |
+| 5. Replay | `replayDeadLetters` for Inventory's queue, then for `order-service.order-events` | Exactly one Inventory message is replayed. The order completes with `DeliveryBooked`, the customer is notified, stock drops by exactly 1, the timeline shows payment, reservation and delivery, and both dead-letter queues are empty |
 
-If the script fails half-way, it still starts PostgreSQL again. CI runs this scenario after `npm run demo`.
+If the script fails half-way, it still starts PostgreSQL and Payment Service again. (Until version 1.1 the order was submitted while PostgreSQL was down; Order Service now needs its database to accept an order.) CI runs this scenario after `npm run demo`.
 
 ## `npm run dlq`: inspect and replay dead letters
 

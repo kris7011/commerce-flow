@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CommerceFlow Order Timeline</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/timeline.css">
+<script type="module" src="/timeline.js"></script>
+</head>
+<body>
+<header class="top">
+  <div>
+    <h1>CommerceFlow · order timeline</h1>
+    <p class="muted">Every entry is a recorded fact: the HTTP acceptance, idempotent retries, the broker's confirmation and each event consumed from RabbitMQ. Payment and delivery are <strong>simulated</strong>.</p>
+  </div>
+  <div id="readiness" class="readiness" role="status" aria-live="polite">Checking Order Service…</div>
+</header>
+
+<main class="layout">
+  <section class="panel" aria-labelledby="submit-heading">
+    <h2 id="submit-heading">Place an order</h2>
+    <form id="order-form" novalidate>
+      <label>Customer id
+        <input id="customer-id" name="customerId" value="customer-demo" maxlength="200" required>
+      </label>
+      <label>Product
+        <select id="product-id" name="productId">
+          <option value="washing-machine-01" data-price="4999">washing-machine-01 · 4999.00 (stock 10)</option>
+          <option value="dishwasher-01" data-price="3999">dishwasher-01 · 3999.00 (stock 5)</option>
+          <option value="dryer-01" data-price="2999">dryer-01 · 2999.00 (stock 3)</option>
+          <option value="unknown-product-01" data-price="100">unknown-product-01 · 100.00 (not stocked)</option>
+        </select>
+      </label>
+      <label>Quantity
+        <input id="quantity" name="quantity" type="number" min="1" max="1000" value="1" required>
+      </label>
+      <div class="key-row">
+        <label>Idempotency-Key
+          <input id="idempotency-key" name="idempotencyKey" readonly>
+        </label>
+        <button type="button" id="new-key-button" class="secondary">New key</button>
+      </div>
+      <p class="muted small">One key per order. Sending the same key and request again is a safe retry; the same key with a different request is rejected.</p>
+      <div class="actions">
+        <button type="submit" id="submit-button" class="primary">Submit order</button>
+        <button type="button" id="retry-button" class="secondary" disabled>Retry same request</button>
+      </div>
+    </form>
+    <div id="response" class="response" aria-live="polite" hidden></div>
+  </section>
+
+  <section class="panel" aria-labelledby="orders-heading">
+    <h2 id="orders-heading">Recent orders</h2>
+    <ol id="order-list" class="order-list"></ol>
+    <p id="orders-empty" class="muted">No orders yet.</p>
+  </section>
+
+  <section class="panel timeline-panel" aria-labelledby="timeline-heading">
+    <h2 id="timeline-heading">Timeline</h2>
+    <div id="timeline-empty" class="muted">Select an order to see its timeline.</div>
+    <div id="timeline" hidden>
+      <div id="timeline-summary" class="summary"></div>
+      <dl id="timeline-facts" class="facts"></dl>
+      <ol id="timeline-entries" class="entries"></ol>
+    </div>
+  </section>
+</main>
+</body>
+</html>

@@ -1,20 +1,23 @@
-import {
+import type {
     Pool
 } from "pg";
 import type {
     AppLogger
 } from "@commerce-flow/logging";
 import {
+    createDatabasePool,
+    DATABASE_READINESS_TIMEOUT_IN_MS,
+    isDatabaseReady
+} from "@commerce-flow/persistence";
+import {
     migrateInventoryDatabase,
     type MigrationResult
 } from "./migrations.js";
 
-/** Development-only default; production must set DATABASE_URL. */
-export const DEFAULT_DATABASE_URL =
-    "postgresql://commerce_flow:" +
-    "commerce_flow@" +
-    "localhost:5432/" +
-    "commerce_flow";
+export {
+    DATABASE_READINESS_TIMEOUT_IN_MS,
+    DEFAULT_DATABASE_URL
+} from "@commerce-flow/persistence";
 
 export interface InventoryDatabasePoolOptions {
     readonly connectionString?: string;
@@ -26,95 +29,23 @@ export function createInventoryDatabasePool(
     options:
         InventoryDatabasePoolOptions = {}
 ): Pool {
-    const pool =
-        new Pool({
-            connectionString:
-                options.connectionString ??
-                process.env.DATABASE_URL ??
-                DEFAULT_DATABASE_URL,
-            application_name:
-                "inventory-service",
-            max:
-                options.maxConnections ??
-                10,
-            // Fail fast while PostgreSQL is unreachable instead of
-            // queueing requests indefinitely.
-            connectionTimeoutMillis:
-                5_000,
-            idleTimeoutMillis:
-                30_000,
-            statement_timeout:
-                15_000
-        });
-
-    // An idle client can fail (e.g. when PostgreSQL restarts).
-    // Without a listener that error would crash the process; the
-    // pool discards the client and reconnects on the next query.
-    pool.on(
-        "error",
-        error => {
-            options.logger?.warn(
-                "Idle PostgreSQL client failed",
-                {
-                    errorMessage:
-                        error.message
-                }
-            );
-        }
-    );
-
-    return pool;
+    return createDatabasePool({
+        ...options,
+        applicationName:
+            "inventory-service"
+    });
 }
-
-/**
- * Upper bound for the readiness query. While PostgreSQL is unreachable
- * a query waits for the pool's connection timeout (5 s); a readiness
- * probe must answer well within typical probe timeouts (about 1 s)
- * instead.
- */
-export const DATABASE_READINESS_TIMEOUT_IN_MS =
-    1_000;
 
 export async function isInventoryDatabaseReady(
     pool: Pick<Pool, "query">,
     timeoutInMs =
         DATABASE_READINESS_TIMEOUT_IN_MS
 ): Promise<boolean> {
-    let timer:
-        NodeJS.Timeout | undefined;
-
-    const timedOut =
-        new Promise<false>(resolve => {
-            timer =
-                setTimeout(
-                    () => resolve(false),
-                    timeoutInMs
-                );
-        });
-
-    // A query that outlives the timeout still finishes in the
-    // background (bounded by the pool's own timeouts); its result is
-    // ignored.
-    const query =
-        pool.query(
-            `
-                SELECT 1
-                FROM inventory_stock
-                LIMIT 1
-            `
-        ).then(
-            () => true,
-            () => false
-        );
-
-    try {
-        return await Promise.race([
-            query,
-            timedOut
-        ]);
-    } finally {
-        clearTimeout(timer);
-    }
+    return isDatabaseReady(
+        pool,
+        "SELECT 1 FROM inventory_stock LIMIT 1",
+        timeoutInMs
+    );
 }
 
 /**

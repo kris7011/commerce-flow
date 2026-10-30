@@ -18,6 +18,6 @@
         "test": "node --import tsx --test tests/schemas.test.ts tests/identifiers.test.ts"
     },
     "dependencies": {
-        "zod": "^4.4.3"
+        "zod": "^4.6.7"
     }
 }

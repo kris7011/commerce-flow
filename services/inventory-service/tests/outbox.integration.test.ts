@@ -21,16 +21,16 @@ import type {
     OutboxMessage,
     OutboxPublisher,
     OutboxStore
-} from "../src/outbox/outbox.js";
+} from "@commerce-flow/persistence";
 import {
     OutboxRelay
-} from "../src/outbox/outboxRelay.js";
+} from "@commerce-flow/persistence";
 import {
     PostgresOutboxStore
-} from "../src/outbox/postgresOutboxStore.js";
+} from "@commerce-flow/persistence";
 import {
     RabbitMqOutboxPublisher
-} from "../src/outbox/rabbitMqOutboxPublisher.js";
+} from "@commerce-flow/persistence";
 import {
     createPaymentAuthorizedHandler
 } from "../src/paymentAuthorizedHandler.js";
@@ -70,7 +70,8 @@ const {
 
 const outboxStore =
     new PostgresOutboxStore(
-        pool
+        pool,
+        "inventory_outbox"
     );
 
 test.beforeEach(

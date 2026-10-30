@@ -76,5 +76,25 @@ export default tseslint.config(
             "eslint.config.js"
         ],
         ...tseslint.configs.disableTypeChecked
+    },
+    {
+        // Plain browser scripts served by a service (no build step).
+        files: [
+            "services/*/public/**/*.js"
+        ],
+        ...tseslint.configs.disableTypeChecked,
+        languageOptions: {
+            sourceType: "module",
+            globals: {
+                clearTimeout: "readonly",
+                console: "readonly",
+                crypto: "readonly",
+                document: "readonly",
+                fetch: "readonly",
+                Node: "readonly",
+                setInterval: "readonly",
+                setTimeout: "readonly"
+            }
+        }
     }
 );

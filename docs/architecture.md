@@ -4,13 +4,13 @@ This document describes how CommerceFlow is structured internally. The [README](
 
 ## Service boundaries
 
-Each service owns one step of the workflow and talks to the others only through events. No service calls another over HTTP, and no two services share a database.
+Each service owns one step of the workflow and talks to the others only through events. No service calls another over HTTP, and no service reads another service's tables. Order and Inventory keep their tables in the same PostgreSQL database for simplicity, each with its own table prefix, migration history (`order_schema_migrations`, `inventory_schema_migrations`) and migration lock; moving Order to its own database only needs a different `DATABASE_URL`.
 
 | Service | Owns | Why it is separate |
 |---|---|---|
-| Order | Accepting and validating orders | The public entry point; must answer quickly and independently of downstream steps |
+| Order | Accepting orders idempotently, storing them, and keeping each order's timeline | The public entry point; must answer quickly and independently of downstream steps (it needs only its database, not the broker) |
 | Payment | Payment authorization (simulated) | In a real system this integrates with a payment provider with its own failure modes |
-| Inventory | Stock and reservations | The only service with durable business state; it must never oversell |
+| Inventory | Stock and reservations | Durable business state that must never oversell |
 | Delivery | Delivery booking (simulated) | Integrates with carriers in a real system |
 | Notification | Customer-facing messages | Reacts to outcomes from several services |
 
@@ -49,6 +49,8 @@ flowchart TB
 * **Adapters** implement those ports for PostgreSQL and in memory. The in-memory adapter keeps the transactional contract (serialised transactions, rollback on throw), so unit tests exercise the same rules.
 * **The composition root** wires concrete adapters, reads configuration and hands background tasks to the service host.
 
+Order Service has the same layers: `OrderService` (ids, event, request fingerprint), the `OrderStore` port with PostgreSQL and in-memory adapters, the HTTP app, the timeline event handler, the pure `buildOrderTimeline`, and an outbox relay. See [order-timeline.md](order-timeline.md).
+
 The stateless services follow the same pattern with fewer moving parts: a pure service class (`PaymentService`, `DeliveryService`, `NotificationService`), a message handler with an injected publisher and logger, an Express app for health endpoints, and an `index.ts`.
 
 Ports exist only where they pay off: where there are several implementations, or where business rules have to be kept free of infrastructure. There is no DI container; dependencies are passed explicitly to constructors and factory functions.
@@ -62,6 +64,7 @@ Ports exist only where they pay off: where there are several implementations, or
 | `@commerce-flow/logging` | Structured JSON logger with child contexts | Errors are serialised; no payloads are logged |
 | `@commerce-flow/runtime` | Configuration readers, `runService` | Graceful, bounded shutdown on SIGTERM/SIGINT |
 | `@commerce-flow/testing` | Isolated test databases | Destructive operations are guarded by a name check |
+| `@commerce-flow/persistence` | PostgreSQL pool, readiness probe, migration runner, `withTransaction`, transactional outbox (store, relay, publisher) | Used by Order and Inventory; each passes its own table names |
 
 ## Messaging layer
 
