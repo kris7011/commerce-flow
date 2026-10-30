@@ -42,8 +42,7 @@ Two complementary measures close this gap:
 
 | Publishing path | Effect of an unroutable message |
 |---|---|
-| Inventory outbox relay | The event stays pending with `last_error` and is retried with backoff until a queue exists |
-| Order Service `POST /orders` | `503` with `Retry-After`; never `201` |
+| Inventory and Order outbox relays | The event stays pending with `last_error` and is retried with backoff until a queue exists; the order or reservation is kept |
 | Payment, Delivery handlers | The handler fails, so the input message is not acknowledged: it is retried and finally dead-lettered |
 
 ## Deterministic re-emission
@@ -79,7 +78,10 @@ The relay wakes up when the handler commits a new event (`notify()`) and otherwi
 | Event matches no queue (missing binding) | Mandatory publish is returned; publication fails; outbox keeps it pending | `routing.integration` · *rejects a publication that no queue can receive*; `outbox.integration` · *keeps an unroutable event pending* |
 | Queue appears after an unroutable attempt | The retry succeeds; no second reservation | `routing.integration` · *publishes successfully once the destination queue exists*; `outbox.integration` |
 | Concurrent publications, some unroutable | Exactly the returned ones fail | `confirmedPublisher` unit; `routing.integration` · *40 concurrent* |
-| `OrderCreated` cannot be routed | `503`, never `201` | `orderApp.integration` |
+| `OrderCreated` cannot be routed | The order is kept; the event stays pending with its error and is retried | `orderPersistence.integration` · *an OrderCreated event the broker cannot route stays in the outbox* |
+| A client retries `POST /orders` (lost response, timeout) | Same `Idempotency-Key` and request → `200` with the original order; nothing new is stored | `orderApp` unit; `orderPersistence.integration` · *20 concurrent submissions* / *over HTTP, concurrent retries*; E2E workflow |
+| The same key is reused for a different order | `422`; nothing is stored, also under concurrency | `orderApp` unit; `orderPersistence.integration` · *a key reused for a different order* |
+| The order timeline receives an event twice, concurrently or out of order | One entry per event id with a delivery count; the status only moves forward | `orderPersistence.integration` · *concurrent redeliveries* / *out-of-order events* |
 | Redelivery to Payment/Delivery on a later date | Byte-identical event | `paymentService` / `deliveryService` unit · *later date* / *after midnight* |
 | Broker nacks, or channel closes before the confirm | `publish()` rejects; the event is retried | `rabbitMqClient` unit · *nacks* / *channel closes* |
 | Confirm never arrives | `PublishTimeoutError`; retried; the lease exceeds the timeout | `rabbitMqClient` unit · *timeout*; config check `OUTBOX_LEASE_MS ≥ 2 × timeout` |
@@ -92,7 +94,8 @@ The relay wakes up when the handler commits a new event (`notify()`) and otherwi
 | Handler keeps failing | Dead-lettered after the last attempt with the original content | `rabbitMqClient.integration` · *exhausts its retries* |
 | Ack on a channel that has already closed | Logged; the broker redelivers to a live consumer | `rabbitMqClient` unit · *does not crash when acknowledging on a closed channel* |
 | Broker down at service start, or lost later | Services stay alive, `/ready` = 503, supervisor reconnects and resubscribes | E2E · *recovers the complete workflow after RabbitMQ becomes available* |
-| Broker down during `POST /orders` | `503` + `Retry-After`; the process keeps running | `orderApp` unit · *returns 503 with Retry-After instead of crashing* |
+| Broker down during `POST /orders` | `201`: the order and its event are stored; the relay publishes once the broker is back | E2E · *recovers the complete workflow after RabbitMQ becomes available* (order accepted during the outage) |
+| Database down during `POST /orders` | `503` + `Retry-After`; retrying with the same key is safe | `orderApp` unit · *answers 503 with Retry-After when the order cannot be stored* |
 | Concurrent schema migrations | Advisory lock; each version applied once | `database.integration` · *serializes concurrent migrations* |
 | A migration fails | All pending migrations roll back | `database.integration` · *rolls back every pending migration* |
 | Payment or Delivery processes a message twice | The re-emitted event is byte-identical (ids, timestamps, dates) | `paymentService` and `deliveryService` unit · *re-emits an identical event* |

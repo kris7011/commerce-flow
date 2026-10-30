@@ -27,7 +27,9 @@ CommerceFlow models a small commerce workflow — order, payment, inventory, del
 
 The business logic is intentionally simple. The engineering focus is on the parts that are hard in real distributed systems:
 
-* **Atomic state changes and events.** Inventory Service writes its stock change and the resulting event in one PostgreSQL transaction (transactional outbox).
+* **Atomic state changes and events.** Order Service stores each order and its `OrderCreated` event in one PostgreSQL transaction, and Inventory Service does the same for its stock change (transactional outbox).
+* **Idempotent order submission.** `POST /orders` requires an `Idempotency-Key`. A retry with the same key returns the original order; a unique index makes this hold under concurrency, so retries cannot create duplicate orders.
+* **A visual order timeline.** Order Service records every event of its orders and serves a page that shows each order's actual steps, outcome, duplicates and simulated steps ([docs/order-timeline.md](docs/order-timeline.md)).
 * **Reliable publication.** Events are published as mandatory messages with RabbitMQ publisher confirms. A publication counts as successful only if the broker confirmed it *and* routed it to a queue; only then is an outbox event marked as published.
 * **Duplicate tolerance.** Delivery is at-least-once. Every consumer is idempotent, and stock can never be reserved twice for the same order.
 * **Failure handling.** Transient failures are retried with bounded backoff, poison messages are dead-lettered, and services recover from broker and database outages without restarting.
@@ -52,10 +54,12 @@ flowchart LR
     end
 
     exchange{{"commerce.events<br/>topic exchange"}}
-    db[(PostgreSQL<br/>stock · reservations · outbox)]
+    db[(PostgreSQL<br/>orders · timeline · stock ·<br/>reservations · outboxes)]
 
-    client -- "POST /orders" --> order
-    order -- order.created --> exchange
+    client -- "POST /orders<br/>Idempotency-Key" --> order
+    order <--> db
+    order -- "order.created<br/>(via outbox relay)" --> exchange
+    exchange -- "payment / inventory / delivery events" --> order
     exchange -- order.created --> payment
     payment -- payment.authorized --> exchange
     exchange -- payment.authorized --> inventory
@@ -68,19 +72,22 @@ flowchart LR
 
 | Service | Responsibility | State | Consumes | Publishes |
 |---|---|---|---|---|
-| **Order** | Validates `POST /orders`, creates the order id and correlation id | none | – | `OrderCreated` |
+| **Order** | Validates `POST /orders`, stores the order idempotently, keeps the order timeline and serves the timeline page | **PostgreSQL** | `PaymentAuthorized`, `InventoryReserved`, `InventoryReservationFailed`, `DeliveryBooked` (timeline only) | `OrderCreated` (outbox) |
 | **Payment** | Authorizes the payment (simulated) | none | `OrderCreated` | `PaymentAuthorized` |
 | **Inventory** | Reserves stock exactly once per order | **PostgreSQL** | `PaymentAuthorized` | `InventoryReserved` / `InventoryReservationFailed` (outbox) |
 | **Delivery** | Books a delivery (simulated) | none | `InventoryReserved` | `DeliveryBooked` |
 | **Notification** | Creates one customer notification per outcome | in-memory | `DeliveryBooked`, `InventoryReservationFailed` | – |
 
-Inventory is the only service that changes durable business state as a reaction to an event, so it is the one that needs a transactional outbox. The other consumers are stateless transformers. See [why they don't need an outbox](#why-only-inventory-has-an-outbox).
+Order and Inventory change durable business state, so both write their events through a transactional outbox. Payment and Delivery are stateless transformers. See [which services need an outbox](#why-only-inventory-has-an-outbox).
 
 ### Repository layout
 
 ```text
 services/
-  order-service/          HTTP API → OrderCreated
+  order-service/          HTTP API → orders + OrderCreated (outbox); order timeline
+    src/postgresOrderStore.ts        idempotent submission, timeline, status
+    src/orderTimeline.ts             stored history → timeline view (pure)
+    public/                          order timeline page (no build step)
   payment-service/        OrderCreated → PaymentAuthorized
   inventory-service/      PaymentAuthorized → stock + outbox → relay
     src/inventoryService.ts          business rules (no infrastructure)
@@ -97,6 +104,7 @@ shared/
   logging/     structured JSON logger
   runtime/     validated configuration and graceful service host
   testing/     isolated test databases with safety guards
+  persistence/ PostgreSQL pool, migration runner, transactional outbox
 tests/e2e/     end-to-end tests against isolated vhosts and databases
 tools/cli/     developer tools: order-flow demo, status view, log trace
 docs/          architecture and reliability deep dives
@@ -127,9 +135,13 @@ sequenceDiagram
     participant D as Delivery
     participant N as Notification
 
-    C->>O: POST /orders
-    O->>X: OrderCreated (await confirm)
+    C->>O: POST /orders (Idempotency-Key)
+    rect rgb(235, 245, 255)
+    note over O,DB: one transaction
+    O->>DB: insert order (unique key) + outbox event + timeline
+    end
     O-->>C: 201 Created
+    R->>X: OrderCreated (await confirm), mark published
     X->>P: OrderCreated
     P->>X: PaymentAuthorized (await confirm)
     P-->>X: ack
@@ -152,6 +164,8 @@ sequenceDiagram
 ```
 
 If any product is unavailable, the transaction stores an `InventoryReservationFailed` event instead, without touching stock. Notification Service then turns that event into a failure notification.
+
+Order Service also consumes `PaymentAuthorized`, `InventoryReserved`, `InventoryReservationFailed` and `DeliveryBooked` on its own queue (`order-service.order-events`) and records them in the order's timeline. This is a read model: it observes the workflow and never drives it.
 
 ### Events and routing
 
@@ -186,6 +200,22 @@ Order Service accepts an `x-correlation-id` header (up to 128 safe characters, o
 ## Reliability and delivery guarantees
 
 The full failure analysis lives in [docs/reliability.md](docs/reliability.md). In summary:
+
+### Idempotent order submission
+
+`POST /orders` requires an `Idempotency-Key` header (1–255 visible ASCII characters, typically a UUID per order). In one PostgreSQL transaction the Order Service inserts the order with `ON CONFLICT (idempotency_key) DO NOTHING`, the `OrderCreated` event into `order_outbox`, and an `Accepted` timeline entry:
+
+| Request | Answer |
+|---|---|
+| New key | `201 Created`; order, event and timeline entry committed together |
+| Same key, same request (a retry) | `200` with the original body and `Idempotent-Replayed: true`; nothing new is created; a `Replayed` entry is added to the timeline |
+| Same key, different request | `422`; nothing is stored |
+| Missing or invalid key | `400` |
+| PostgreSQL unavailable | `503` with `Retry-After`; retrying with the same key is safe whether or not the first commit happened |
+
+Two requests are "the same" when the SHA-256 fingerprint of their canonical content matches. Concurrent requests with one key are decided by the unique index: one inserts, the others wait for it and then find its order. The integration tests send 20 concurrent submissions with one key and get exactly one order and one outbox event.
+
+Because `OrderCreated` is committed with the order, the API no longer depends on RabbitMQ: an order is accepted while the broker is down and published by the relay once it is back. This replaces the earlier behaviour (synchronous publish, `503` when the broker was unavailable), in which a lost confirm followed by a retry could create a second order.
 
 ### Transactional outbox
 
@@ -225,7 +255,7 @@ stateDiagram-v2
 | Mandatory publishing + `basic.return` correlation | A message the broker accepted but could not route to any queue counts as **failed**, even though RabbitMQ still sends a positive confirm for it |
 | Persistent messages, durable queues | Accepted messages survive a broker restart |
 | Manual ack after the handler completes | A crash during handling causes redelivery, never loss |
-| Outbox | A committed reservation always gets its event published |
+| Outbox | A committed order or reservation always gets its event published |
 
 The cost of these guarantees is **duplicates**: a crash between "publish" and "ack" or "mark published" causes the message to be sent again. CommerceFlow absorbs duplicates at every consumer:
 
@@ -234,6 +264,7 @@ The cost of these guarantees is **duplicates**: a crash between "publish" and "a
 | Inventory | **Durable.** The business key `order_id` is serialised by an advisory lock and backed by the primary key. It also catches logically duplicate events that carry a *different* event id. |
 | Payment, Delivery | The emitted event is a pure function of the source event: ids are derived deterministically (UUIDv5 layout) and timestamps and dates come from the source event, so reprocessing — even on a later date — re-emits a *byte-identical* event. One event id never stands for two different outcomes. |
 | Notification | Deduplicates on the business key (order id, notification type). |
+| Order (timeline) | **Durable.** Timeline entries are unique by event id; a redelivery increments a `deliveries` counter instead of adding a row, and the status only moves forward, so late or repeated events change nothing. |
 | All | A bounded in-memory cache of recent event ids skips obvious redeliveries cheaply. It is an optimisation only. |
 
 ### Retries, poison messages and recovery
@@ -241,7 +272,7 @@ The cost of these guarantees is **duplicates**: a crash between "publish" and "a
 * **Handler failures** (for example a short database outage) are retried in-process with exponential backoff: 5 attempts in total, starting at 0.5 s and doubling (capped at 8 s). After that, the message is dead-lettered.
 * **Malformed messages** (invalid JSON or a contract violation), and handlers that throw `PermanentMessageError`, are dead-lettered immediately without retries.
 * **Prefetch** (default 10) limits how many unacknowledged deliveries each consumer holds.
-* **Broker outage:** services stay alive and report `/ready` as `503`. The supervisor reconnects and re-declares the topology and subscriptions. Order Service answers `503` with `Retry-After`. The outbox keeps events pending and retries them.
+* **Broker outage:** services stay alive and report `/ready` as `503`. The supervisor reconnects and re-declares the topology and subscriptions. Order Service still accepts orders: their events wait in its outbox, which keeps events pending and retries them.
 * **Database outage:** the pool fails fast (5 s connect timeout, 15 s statement timeout). Handler retries and the relay's backoff bridge short outages, and the process survives terminated connections.
 * **Shutdown** (SIGTERM or SIGINT): the service stops accepting HTTP requests, stops consuming, drains in-flight handlers, lets the relay finish its batch, and only then closes its connections. If this exceeds the timeout, the process exits forcibly.
 
@@ -261,12 +292,14 @@ git clone https://github.com/kris7011/commerce-flow.git
 cd commerce-flow
 npm ci
 npm run stack:up   # RabbitMQ, PostgreSQL and all five services as containers
-npm run demo       # orders, a duplicate event and an invalid request, with checks
+npm run demo       # orders, an idempotent retry, a duplicate event and an invalid request, with checks
 npm run status     # readiness, stock, outbox, queue and dead-letter depths
-npm run demo:recovery  # PostgreSQL outage → dead letter → replay → order completes
+npm run demo:recovery  # PostgreSQL outage → dead letters → replay → order and timeline complete
 ```
 
-The demo prints the events of each order as they cross the exchange, and checks the results: stock, notifications, outbox and dead-letter queues. It exits non-zero if anything is wrong, and CI runs it against the containers on every push. [docs/demo.md](docs/demo.md) explains each step, and `npm run trace` follows one order through the logs of all services.
+Then open the order timeline at <http://localhost:3001/>.
+
+The demo prints the events of each order as they cross the exchange, and checks the results: an idempotent retry, the order timeline, stock, notifications, outbox and dead-letter queues. It exits non-zero if anything is wrong, and CI runs it against the containers on every push. [docs/demo.md](docs/demo.md) explains each step, and `npm run trace` follows one order through the logs of all services.
 
 ### Install and start the infrastructure (services from source)
 
@@ -281,7 +314,7 @@ The ports are published on `127.0.0.1` only. The containers use **development-on
 
 ### Run the services
 
-Each service runs in its own terminal. Inventory Service applies its database migrations on startup.
+Each service runs in its own terminal. Order Service and Inventory Service apply their database migrations on startup.
 
 ```bash
 npm run dev:notification
@@ -297,16 +330,22 @@ npm run dev:order
 # Initial stock
 curl http://localhost:3003/stock
 
-# A successful order
-curl -X POST http://localhost:3001/orders \
+# A successful order (send the same request again: 200, same order)
+curl -i -X POST http://localhost:3001/orders \
   -H "content-type: application/json" \
+  -H "idempotency-key: 7d0c3c43-6f0b-4a64-9a6e-3a3c1b9b8f10" \
   -H "x-correlation-id: demo-001" \
   -d '{"customerId":"customer-1","items":[{"productId":"washing-machine-01","quantity":1,"unitPrice":4999}]}'
 
 # An order that cannot be fulfilled
 curl -X POST http://localhost:3001/orders \
   -H "content-type: application/json" \
+  -H "idempotency-key: $(uuidgen || powershell -c [guid]::NewGuid())" \
   -d '{"customerId":"customer-2","items":[{"productId":"dryer-01","quantity":99,"unitPrice":2999}]}'
+
+# Orders and the timeline of one order (or open http://localhost:3001/)
+curl http://localhost:3001/orders
+curl http://localhost:3001/orders/<orderId>
 
 curl http://localhost:3005/notifications
 curl http://localhost:3003/diagnostics/outbox
@@ -319,8 +358,12 @@ The demo catalogue contains `washing-machine-01` (10), `dishwasher-01` (5) and `
 | Service | Endpoint | Purpose |
 |---|---|---|
 | all | `GET /health` | Liveness: the process is running |
-| all | `GET /ready` | Readiness: RabbitMQ (and, for Inventory, PostgreSQL) is usable; returns `503` otherwise |
-| Order | `POST /orders` | `201` created · `400` invalid input · `503` broker unavailable (retry) |
+| all | `GET /ready` | Readiness: RabbitMQ (and, for Order and Inventory, PostgreSQL) is usable; returns `503` otherwise |
+| Order | `POST /orders` | Requires `Idempotency-Key`. `201` created · `200` replayed retry · `400` invalid input or key · `422` key reused for another order · `503` database unavailable (retry with the same key) |
+| Order | `GET /orders?limit=20` | Most recent orders with their current status |
+| Order | `GET /orders/{orderId}` | The order, its outcome and its timeline (entries with service, time, duplicates, simulated flag) |
+| Order | `GET /diagnostics/outbox` | Order outbox backlog and relay status (no payloads) |
+| Order | `GET /` | The order timeline page |
 | Inventory | `GET /stock` | Current stock |
 | Inventory | `GET /diagnostics/outbox` | Pending count, oldest pending event, max attempts and relay status (no payloads) |
 | Notification | `GET /notifications` | Notifications created so far |
@@ -372,7 +415,10 @@ Every service writes one JSON object per line, with the service name, a message 
 | `basic.return` fails the right publication among concurrent ones (even with identical message ids) | `shared/messaging/tests/confirmedPublisher.test.ts` |
 | Fresh virtual host without bindings: publish is rejected as unroutable; succeeds once the queue exists; 40 concurrent mixed publications; real broker nack; publisher before any consumer | `shared/messaging/tests/integration/routing.integration.test.ts` |
 | Unroutable outbox event stays pending and is published once its queue exists, without a second reservation | `inventory-service/tests/outbox.integration.test.ts` |
-| Order Service answers 503 (never 201) when `OrderCreated` cannot be routed | `order-service/tests/orderApp.integration.test.ts` |
+| 20 concurrent submissions with one `Idempotency-Key` create one order and one outbox event; a key reused for another order is rejected, also concurrently | `order-service/tests/orderPersistence.integration.test.ts` |
+| 8 concurrent HTTP retries answer `201` once and `200` for the rest, all with the same order id | same |
+| 10 concurrent redeliveries of one event give one timeline entry with `deliveries = 10`; out-of-order events never move the status back | same |
+| An unroutable `OrderCreated` stays in the outbox with its error while the order is kept; once routable it is published and the timeline shows the confirmation | same |
 | Redelivery across a date change re-emits an identical event | `payment-service` and `delivery-service` unit tests |
 | Poison message → DLQ, retry exhaustion → DLQ, graceful drain without redelivery | `shared/messaging/tests/integration` |
 | Broker unreachable → events stay pending → a restarted relay publishes them | `inventory-service/tests/outbox.integration.test.ts` |
@@ -380,9 +426,9 @@ Every service writes one JSON object per line, with the service name, a message 
 | 4 competing relays publish 200 events exactly once; stale claims are fenced | same |
 | The relay survives PostgreSQL terminating its connections and finishes its batch on shutdown | same |
 | Concurrent migrations apply once; the legacy schema is adopted; a failed migration rolls back | `inventory-service/tests/database.integration.test.ts` |
-| Full workflow, success and failure; orders accepted while every downstream service is still offline | `tests/e2e/commerceFlow.e2e.test.ts` |
+| Full workflow, success and failure, an idempotent retry and both timelines; orders accepted while every downstream service is still offline | `tests/e2e/commerceFlow.e2e.test.ts` |
 | Duplicate deliveries, poison message, outbox recovery after an Inventory `SIGKILL` | `tests/e2e/inventoryReliability.e2e.test.ts` |
-| All services survive a broker outage and recover without restarting | `tests/e2e/rabbitMqRecovery.e2e.test.ts` |
+| All services survive a broker outage and recover without restarting; an order accepted **while RabbitMQ is down** completes after recovery | `tests/e2e/rabbitMqRecovery.e2e.test.ts` |
 
 Tests wait on observable conditions, such as readiness endpoints, structured log entries and database state, rather than fixed sleeps.
 
@@ -411,7 +457,11 @@ A second job, **Full-stack demo (containers)**, builds the service image, starts
 **Business-key idempotency instead of an inbox table.** The order id identifies the business operation. Keying the reservation on it catches redeliveries *and* re-emitted events with new ids, which an inbox keyed on message ids would miss. A separate inbox would add a table without adding protection.
 
 <a id="why-only-inventory-has-an-outbox"></a>
-**Why only Inventory has an outbox.** Payment and Delivery hold no state of their own. For them, publish-then-ack is already at-least-once: the unacknowledged input message is the durable retry record, and deterministic ids make the retry safe. Order Service has no database. It publishes synchronously and answers `503` when it cannot, so the client is the retry mechanism.
+**Which services need an outbox.** Payment and Delivery hold no state of their own. For them, publish-then-ack is already at-least-once: the unacknowledged input message is the durable retry record, and deterministic ids make the retry safe. Order and Inventory store business state, so their events go through an outbox in the same transaction. (Until version 1.1, Order Service had no database and published synchronously, which allowed a duplicate order after a lost confirm.)
+
+**Idempotency key in the database, not in a cache.** A unique index on `idempotency_key` is the only check that also holds across service instances, restarts and concurrent requests. The request fingerprint distinguishes a retry from a reused key. Keys are kept with the order indefinitely here; a production system would expire them after a retention period.
+
+**The timeline is a read model in Order Service.** It consumes the existing events on its own queue instead of querying other services, so it adds no synchronous coupling, and it shows only what was actually published. The trade-off: it is eventually consistent (an event appears when Order Service has consumed it), and Notification Service's work is not on it because Notification publishes no event.
 
 **At-least-once, not exactly-once.** Exactly-once delivery across a broker and a database is not achievable without distributed transactions. CommerceFlow guarantees *effectively-once business effects* for stock (idempotent consumer + atomic outbox) and says so explicitly.
 
@@ -426,7 +476,8 @@ A second job, **Full-stack demo (containers)**, builds the service image, starts
 ## Known limitations
 
 * **No end-to-end exactly-once.** Duplicates are expected and handled; downstream systems must stay idempotent.
-* **Order Service has no persistence or idempotency key.** If the broker accepts `OrderCreated` but the confirm is lost (timeout), the client gets `503` and a retry creates a second order. The fix is order persistence plus an `Idempotency-Key` header and an outbox.
+* **Idempotency keys never expire** and are global (there is no authentication, so they are not scoped per client). Production would scope keys to the authenticated client and expire them.
+* **The order timeline is eventually consistent** and shows only published events; Notification Service's step is not on it.
 * **Payment and delivery are simulated.** Payment always succeeds and nothing is compensated: a failed reservation does not refund the payment (no saga).
 * **Notifications are in memory** and are lost on restart.
 * **Handler retries live in memory.** A crash during a retry delay leads to redelivery (safe, but the retry counter restarts). Dead-lettered messages are replayed by an operator with `npm run dlq -- replay <queue>`, not automatically.
@@ -443,6 +494,8 @@ A second job, **Full-stack demo (containers)**, builds the service image, starts
 
 * [docs/architecture.md](docs/architecture.md): boundaries, ports and adapters, the messaging layer and the service host
 * [docs/reliability.md](docs/reliability.md): failure-mode analysis and how each failure is handled and tested
+* [docs/order-timeline.md](docs/order-timeline.md): durable, idempotent order submission and the order timeline
+* [docs/PROJECT_WALKTHROUGH.md](docs/PROJECT_WALKTHROUGH.md): developer walkthrough, design decisions and interview preparation
 * [docs/demo.md](docs/demo.md): the containerised stack, the scripted demo, `status` and `trace`
 
 ---
