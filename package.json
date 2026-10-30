@@ -13,6 +13,7 @@
     "shared/logging",
     "shared/testing",
     "shared/runtime",
+    "shared/persistence",
     "services/order-service",
     "services/payment-service",
     "services/inventory-service",

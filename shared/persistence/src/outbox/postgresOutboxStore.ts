@@ -25,8 +25,12 @@ interface StatisticsRow {
 const MAX_STORED_ERROR_LENGTH =
     2_000;
 
+/** Outbox table names are interpolated into SQL, so only plain identifiers are allowed. */
+const TABLE_NAME_PATTERN =
+    /^[a-z_][a-z0-9_]{0,62}$/;
+
 /**
- * PostgreSQL outbox store.
+ * PostgreSQL outbox store for one service's outbox table.
  *
  * Every operation is a single short statement: no transaction is held
  * open while the relay talks to RabbitMQ. Claiming pushes available_at
@@ -35,9 +39,20 @@ const MAX_STORED_ERROR_LENGTH =
  */
 export class PostgresOutboxStore
     implements OutboxStore {
+    private readonly table: string;
+
     constructor(
-        private readonly pool: Pool
+        private readonly pool: Pool,
+        tableName: string
     ) {
+        if (!TABLE_NAME_PATTERN.test(tableName)) {
+            throw new Error(
+                `Invalid outbox table name '${tableName}'.`
+            );
+        }
+
+        this.table =
+            tableName;
     }
 
     async claimBatch(
@@ -50,7 +65,7 @@ export class PostgresOutboxStore
                 `
                     WITH due AS (
                         SELECT sequence_id
-                        FROM inventory_outbox
+                        FROM ${this.table}
                         WHERE
                             published_at IS NULL
                             AND available_at <= clock_timestamp()
@@ -58,7 +73,7 @@ export class PostgresOutboxStore
                         LIMIT $1
                         FOR UPDATE SKIP LOCKED
                     )
-                    UPDATE inventory_outbox AS outbox
+                    UPDATE ${this.table} AS outbox
                     SET
                         available_at =
                             clock_timestamp() +
@@ -102,7 +117,7 @@ export class PostgresOutboxStore
         // event it is published, whoever recorded it first.
         await this.pool.query(
             `
-                UPDATE inventory_outbox
+                UPDATE ${this.table}
                 SET
                     published_at = clock_timestamp(),
                     claimed_by = NULL,
@@ -129,7 +144,7 @@ export class PostgresOutboxStore
         const result =
             await this.pool.query(
                 `
-                    UPDATE inventory_outbox
+                    UPDATE ${this.table}
                     SET
                         available_at =
                             clock_timestamp() +
@@ -165,7 +180,7 @@ export class PostgresOutboxStore
                         count(*) AS "pendingCount",
                         min(created_at) AS "oldestPendingCreatedAt",
                         max(attempts) AS "maxPendingAttempts"
-                    FROM inventory_outbox
+                    FROM ${this.table}
                     WHERE published_at IS NULL
                 `
             );
