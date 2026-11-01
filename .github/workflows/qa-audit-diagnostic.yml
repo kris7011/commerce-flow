@@ -1,0 +1,55 @@
+name: QA dependency audit details
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  diagnostic:
+    if: github.head_ref == 'qa/cross-platform-20261101'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Install dependencies without running package scripts
+        run: npm ci --ignore-scripts --no-audit
+      - name: Capture audit diagnostics without bypassing the existing CI gate
+        run: npm audit --json > audit-diagnostic.json || true
+      - name: Format a concise security diagnostic
+        run: |
+          node --input-type=module - <<'NODE'
+          import fs from 'node:fs';
+          const report = JSON.parse(fs.readFileSync('audit-diagnostic.json', 'utf8'));
+          const items = Object.entries(report.vulnerabilities ?? {});
+          const lines = [
+            '### QA npm audit diagnostics',
+            'The existing CI npm audit gate remains enabled and failing. This diagnostic does not suppress findings.',
+            '',
+            ...items.map(([name, finding]) => {
+              const advisories = (finding.via ?? []).filter(v => typeof v === 'object');
+              return [
+                '- **' + name + '** — ' + finding.severity +
+                  ', direct=' + finding.isDirect + ', fixAvailable=' + JSON.stringify(finding.fixAvailable),
+                ...advisories.map(a => '  - ' + a.title + ': ' + a.url)
+              ].join('\n');
+            }),
+            ...(items.length ? [] : ['No structured advisories returned; inspect the CI audit step for a registry/network error.']),
+            '',
+            'Total vulnerabilities: ' + JSON.stringify(report.metadata?.vulnerabilities ?? {}),
+          ];
+          fs.writeFileSync('audit-summary.md', lines.join('\n').slice(0, 30000));
+          NODE
+      - name: Post diagnostics on this QA pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: kris7011/commerce-flow
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: gh pr comment "$PR_NUMBER" --body-file audit-summary.md
