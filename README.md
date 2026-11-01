@@ -19,6 +19,8 @@
 
 </div>
 
+**Review this project:** [Quick local demo and engineering walkthrough](docs/REVIEWER_GUIDE.md). Run all five services with Docker, inspect the order timeline, and examine idempotency and failure recovery—no cloud account needed.
+
 ---
 
 ## Overview
