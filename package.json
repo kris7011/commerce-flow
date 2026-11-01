@@ -52,7 +52,8 @@
     "stack:down": "docker compose --profile app down"
   },
   "overrides": {
-    "qs": "6.17.1"
+    "qs": "6.17.1",
+    "minimatch": "^11.0.1"
   },
   "devDependencies": {
     "@commerce-flow/testing": "file:shared/testing",
